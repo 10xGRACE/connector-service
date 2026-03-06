@@ -385,3 +385,15 @@ pub type WorldpayPostAuthenticateRequest = WorldpayAuthenticateRequest;
 
 // RepeatPayment uses the same request structure as Authorize (MIT vs CIT)
 pub type WorldpayRepeatPaymentRequest<T> = WorldpayAuthorizeRequest<T>;
+
+// Incremental Authorization types
+#[derive(Debug, Serialize)]
+pub struct WorldpayIncrementalAuthorizationRequest {
+    pub value: WorldpayIncrementalAuthorizationValue,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorldpayIncrementalAuthorizationValue {
+    pub amount: i64,
+    pub currency: String,
+}

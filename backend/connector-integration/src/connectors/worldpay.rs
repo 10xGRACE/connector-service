@@ -3,14 +3,15 @@ pub mod response;
 pub mod transformers;
 
 use self::requests::{
-    WorldpayAuthorizeRequest, WorldpayCaptureRequest, WorldpayPostAuthenticateRequest,
-    WorldpayPreAuthenticateRequest, WorldpayRefundRequest, WorldpayRepeatPaymentRequest,
+    WorldpayAuthorizeRequest, WorldpayCaptureRequest, WorldpayIncrementalAuthorizationRequest,
+    WorldpayPostAuthenticateRequest, WorldpayPreAuthenticateRequest, WorldpayRefundRequest,
+    WorldpayRepeatPaymentRequest,
 };
 use self::response::{
     WorldpayAuthorizeResponse, WorldpayCaptureResponse, WorldpayErrorResponse,
-    WorldpayPostAuthenticateResponse, WorldpayPreAuthenticateResponse, WorldpayRefundResponse,
-    WorldpayRefundSyncResponse, WorldpayRepeatPaymentResponse, WorldpaySyncResponse,
-    WorldpayVoidResponse,
+    WorldpayIncrementalAuthorizationResponse, WorldpayPostAuthenticateResponse,
+    WorldpayPreAuthenticateResponse, WorldpayRefundResponse, WorldpayRefundSyncResponse,
+    WorldpayRepeatPaymentResponse, WorldpaySyncResponse, WorldpayVoidResponse,
 };
 use common_utils::{errors::CustomResult, events, ext_traits::BytesExt};
 use domain_types::{
@@ -36,7 +37,7 @@ use domain_types::{
     router_response_types::Response,
     types::Connectors,
 };
-use hyperswitch_masking::{Mask, Maskable, PeekInterface};
+use hyperswitch_masking::{ExposeInterface, Mask, Maskable, PeekInterface};
 use interfaces::{
     api::ConnectorCommon, connector_integration_v2::ConnectorIntegrationV2, connector_types,
     decode::BodyDecoding, verification::SourceVerification,
@@ -53,16 +54,6 @@ pub const BASE64_ENGINE: base64::engine::GeneralPurpose = base64::engine::genera
 use error_stack::ResultExt;
 
 // Trait implementations with generic type parameters
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        IncrementalAuthorization,
-        PaymentFlowData,
-        PaymentsIncrementalAuthorizationData,
-        PaymentsResponseData,
-    > for Worldpay<T>
-{
-}
 
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     connector_types::ConnectorServiceTrait<T> for Worldpay<T>
@@ -239,6 +230,12 @@ macros::create_all_prerequisites!(
             request_body: WorldpayRepeatPaymentRequest<T>,
             response_body: WorldpayRepeatPaymentResponse,
             router_data: RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: IncrementalAuthorization,
+            request_body: WorldpayIncrementalAuthorizationRequest,
+            response_body: WorldpayIncrementalAuthorizationResponse,
+            router_data: RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
         )
     ],
     amount_converters: [],
@@ -652,6 +649,49 @@ macros::macro_connector_implementation!(
             req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
         ) -> CustomResult<String, errors::ConnectorError> {
             Ok(format!("{}api/payments", self.connector_base_url_payments(req)))
+        }
+    }
+);
+
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_error_response_v2],
+    connector: Worldpay,
+    curl_request: Json(WorldpayIncrementalAuthorizationRequest),
+    curl_response: WorldpayIncrementalAuthorizationResponse,
+    flow_name: IncrementalAuthorization,
+    resource_common_data: PaymentFlowData,
+    flow_request: PaymentsIncrementalAuthorizationData,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            self.build_headers(req)
+        }
+        fn get_content_type(&self) -> &'static str {
+            "application/vnd.worldpay.payments-v7+json"
+        }
+        fn get_url(
+            &self,
+            req: &RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            // Extract link_data from connector_metadata in request
+            let link_data: Option<String> = req.request.connector_metadata.clone()
+                .and_then(|m| {
+                    let value = m.expose();
+                    value.get("link_data").and_then(|link| link.as_str().map(String::from))
+                });
+
+            match link_data {
+                Some(link) => Ok(format!("{}{}", self.connector_base_url_payments(req), link)),
+                None => Err(errors::ConnectorError::MissingRequiredField {
+                    field_name: "link_data"
+                })?,
+            }
         }
     }
 );
