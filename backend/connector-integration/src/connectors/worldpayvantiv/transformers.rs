@@ -3,11 +3,14 @@ use std::borrow::Cow;
 use common_enums::{self, CountryAlpha2, Currency};
 use common_utils::{id_type::CustomerId, types::MinorUnit, StringMajorUnit};
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, RSync, Refund, Void, VoidPC},
+    connector_flow::{
+        Authorize, Capture, IncrementalAuthorization, PSync, RSync, Refund, Void, VoidPC,
+    },
     connector_types::{
         PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData, PaymentsCancelPostCaptureData,
-        PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData, RefundFlowData,
-        RefundSyncData, RefundsData, RefundsResponseData, ResponseId,
+        PaymentsCaptureData, PaymentsIncrementalAuthorizationData, PaymentsResponseData,
+        PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData,
+        ResponseId,
     },
     errors::ConnectorError,
     payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData},
@@ -233,6 +236,90 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: None,
             void: None,
             credit: None,
+            incremental_authorization: None,
+        };
+
+        Ok(Self { cnp_request })
+    }
+}
+
+// TryFrom for Incremental Authorization request
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        WorldpayvantivRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for WorldpayvantivPaymentsRequest<T>
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: WorldpayvantivRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let auth = WorldpayvantivAuthType::try_from(&item.router_data.connector_auth_type)?;
+
+        let authentication = Authentication {
+            user: auth.user,
+            password: auth.password,
+        };
+
+        let merchant_txn_id = get_valid_transaction_id(
+            item.router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            "transaction_id",
+        )?;
+
+        // Extract report group from metadata or use default
+        let report_group =
+            extract_report_group(&item.router_data.resource_common_data.connector_meta_data)
+                .unwrap_or_else(|| "rtpGrp".to_string());
+
+        // Get the original connector transaction ID (cnpTxnId from Estimated Auth)
+        let cnp_txn_id = item
+            .router_data
+            .request
+            .connector_transaction_id
+            .get_connector_transaction_id()
+            .change_context(ConnectorError::MissingConnectorTransactionID)?;
+
+        let incremental_authorization = IncrementalAuthorizationRequest {
+            id: format!("{}_{}", OperationId::Auth, merchant_txn_id),
+            report_group: report_group.clone(),
+            customer_id: extract_customer_id(&item.router_data.resource_common_data.customer_id)
+                .map(Secret::new),
+            cnp_txn_id,
+            amount: item.router_data.request.minor_amount,
+            auth_indicator: "Incremental".to_string(),
+        };
+
+        let cnp_request = CnpOnlineRequest {
+            version: worldpayvantiv_constants::WORLDPAYVANTIV_VERSION.to_string(),
+            xmlns: worldpayvantiv_constants::XMLNS.to_string(),
+            merchant_id: auth.merchant_id,
+            authentication,
+            authorization: None,
+            sale: None,
+            capture: None,
+            auth_reversal: None,
+            void: None,
+            credit: None,
+            incremental_authorization: Some(incremental_authorization),
         };
 
         Ok(Self { cnp_request })
@@ -306,6 +393,8 @@ pub struct CnpOnlineRequest<T: PaymentMethodDataTypes> {
     pub void: Option<VoidRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credit: Option<RefundRequest>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "authorization")]
+    pub incremental_authorization: Option<IncrementalAuthorizationRequest>,
 }
 
 #[derive(Debug, Serialize)]
@@ -413,6 +502,22 @@ pub struct RefundRequest {
     pub customer_id: Option<String>,
     pub cnp_txn_id: String,
     pub amount: MinorUnit,
+}
+
+// Incremental Authorization Request - Uses a simplified structure without card data
+// Reference: https://developer.worldpay.com/docs/vantiv-xml/incr-auth
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementalAuthorizationRequest {
+    #[serde(rename = "@id")]
+    pub id: String,
+    #[serde(rename = "@reportGroup")]
+    pub report_group: String,
+    #[serde(rename = "@customerId", skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<Secret<String>>,
+    pub cnp_txn_id: String,
+    pub amount: MinorUnit,
+    pub auth_indicator: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1254,6 +1359,7 @@ pub enum WorldpayvantivPaymentFlow {
     Capture,
     Void,
     VoidPC, // VoidPostCapture
+    IncrementalAuth,
 }
 
 // Helper function to determine payment flow type from merchant transaction ID
@@ -1297,6 +1403,7 @@ fn determine_attempt_status_for_psync(
             WorldpayvantivPaymentFlow::Auth => Ok(common_enums::AttemptStatus::Authorized),
             WorldpayvantivPaymentFlow::Void => Ok(common_enums::AttemptStatus::Voided),
             WorldpayvantivPaymentFlow::VoidPC => Ok(common_enums::AttemptStatus::VoidedPostCapture),
+            WorldpayvantivPaymentFlow::IncrementalAuth => Ok(current_status),
         },
         PaymentStatus::TransactionDeclined => match flow_type {
             WorldpayvantivPaymentFlow::Sale | WorldpayvantivPaymentFlow::Capture => {
@@ -1306,6 +1413,7 @@ fn determine_attempt_status_for_psync(
             WorldpayvantivPaymentFlow::Void | WorldpayvantivPaymentFlow::VoidPC => {
                 Ok(common_enums::AttemptStatus::VoidFailed)
             }
+            WorldpayvantivPaymentFlow::IncrementalAuth => Ok(current_status),
         },
         PaymentStatus::PaymentStatusNotFound
         | PaymentStatus::NotYetProcessed
@@ -1836,6 +1944,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: None,
             void: None,
             credit: None,
+            incremental_authorization: None,
         };
 
         Ok(Self { cnp_request })
@@ -1897,6 +2006,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: Some(auth_reversal),
             void: None,
             credit: None,
+            incremental_authorization: None,
         };
 
         Ok(Self { cnp_request })
@@ -1972,6 +2082,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: None,
             void: None,
             credit: Some(credit),
+            incremental_authorization: None,
         };
 
         Ok(Self { cnp_request })
@@ -2043,6 +2154,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: None,
             void: Some(void),
             credit: None,
+            incremental_authorization: None,
         };
 
         Ok(Self { cnp_request })
@@ -2193,6 +2305,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: None,
             void: None,
             credit: None,
+            incremental_authorization: None,
         })
     }
 }
@@ -2329,6 +2442,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             auth_reversal: None,
             void: Some(void),
             credit: None,
+            incremental_authorization: None,
         })
     }
 }
@@ -2542,6 +2656,87 @@ impl TryFrom<ResponseRouterData<CnpOnlineResponse, Self>>
     }
 }
 
+// TryFrom for Incremental Authorization response
+// The response uses the same authorizationResponse structure as regular auth
+impl TryFrom<ResponseRouterData<CnpOnlineResponse, Self>>
+    for RouterDataV2<
+        IncrementalAuthorization,
+        PaymentFlowData,
+        PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(item: ResponseRouterData<CnpOnlineResponse, Self>) -> Result<Self, Self::Error> {
+        // Incremental authorization responses come back as authorization_response
+        if let Some(auth_response) = item.response.authorization_response {
+            let status = get_attempt_status(
+                WorldpayvantivPaymentFlow::IncrementalAuth,
+                auth_response.response,
+            )?;
+
+            if is_payment_failure(status) {
+                let error_response = ErrorResponse {
+                    code: auth_response.response.to_string(),
+                    message: auth_response.message.clone(),
+                    reason: Some(auth_response.message.clone()),
+                    status_code: item.http_code,
+                    attempt_status: Some(status),
+                    connector_transaction_id: Some(auth_response.cnp_txn_id.clone()),
+                    network_decline_code: None,
+                    network_advice_code: None,
+                    network_error_message: None,
+                };
+
+                Ok(Self {
+                    resource_common_data: PaymentFlowData {
+                        status,
+                        ..item.router_data.resource_common_data
+                    },
+                    response: Err(error_response),
+                    ..item.router_data
+                })
+            } else {
+                let payments_response = PaymentsResponseData::IncrementalAuthorizationResponse {
+                    status: common_enums::AuthorizationStatus::Success,
+                    connector_authorization_id: Some(auth_response.cnp_txn_id.clone()),
+                    status_code: item.http_code,
+                };
+
+                Ok(Self {
+                    resource_common_data: PaymentFlowData {
+                        status,
+                        ..item.router_data.resource_common_data
+                    },
+                    response: Ok(payments_response),
+                    ..item.router_data
+                })
+            }
+        } else {
+            let error_response = ErrorResponse {
+                code: item.response.response_code,
+                message: item.response.message.clone(),
+                reason: Some(item.response.message.clone()),
+                status_code: item.http_code,
+                attempt_status: Some(common_enums::AttemptStatus::Failure),
+                connector_transaction_id: None,
+                network_decline_code: None,
+                network_advice_code: None,
+                network_error_message: None,
+            };
+
+            Ok(Self {
+                resource_common_data: PaymentFlowData {
+                    status: common_enums::AttemptStatus::Failure,
+                    ..item.router_data.resource_common_data
+                },
+                response: Err(error_response),
+                ..item.router_data
+            })
+        }
+    }
+}
+
 // Status mapping functions
 fn get_attempt_status(
     flow: WorldpayvantivPaymentFlow,
@@ -2558,6 +2753,9 @@ fn get_attempt_status(
             WorldpayvantivPaymentFlow::Void => Ok(common_enums::AttemptStatus::VoidInitiated),
             WorldpayvantivPaymentFlow::VoidPC => {
                 Ok(common_enums::AttemptStatus::VoidPostCaptureInitiated)
+            }
+            WorldpayvantivPaymentFlow::IncrementalAuth => {
+                Ok(common_enums::AttemptStatus::Authorized)
             }
         },
         // Decline codes - all other response codes not listed above
@@ -2673,6 +2871,7 @@ fn get_attempt_status(
             WorldpayvantivPaymentFlow::Void | WorldpayvantivPaymentFlow::VoidPC => {
                 Ok(common_enums::AttemptStatus::VoidFailed)
             }
+            WorldpayvantivPaymentFlow::IncrementalAuth => Ok(common_enums::AttemptStatus::Failure),
         },
     }
 }
