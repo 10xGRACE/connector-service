@@ -13,13 +13,15 @@ use common_utils::{
 };
 use domain_types::{
     connector_flow::{
-        Authorize, Capture, PSync, PostAuthenticate, RepeatPayment, VerifyWebhookSource,
+        Authorize, Capture, IncrementalAuthorization, PSync, PostAuthenticate, RepeatPayment,
+        VerifyWebhookSource,
     },
     connector_types::{
         AccessTokenResponseData, MandateReference, PaymentFlowData, PaymentsAuthorizeData,
-        PaymentsCaptureData, PaymentsPostAuthenticateData, PaymentsResponseData, PaymentsSyncData,
-        RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData, RepeatPaymentData,
-        ResponseId, SetupMandateRequestData, VerifyWebhookSourceFlowData,
+        PaymentsCaptureData, PaymentsIncrementalAuthorizationData, PaymentsPostAuthenticateData,
+        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
+        RefundsResponseData, RepeatPaymentData, ResponseId, SetupMandateRequestData,
+        VerifyWebhookSourceFlowData,
     },
     errors::ConnectorError,
     payment_method_data::{
@@ -2286,6 +2288,21 @@ pub struct PaypalCaptureResponse {
     payment_source: Option<PaymentSourceItemResponse>,
 }
 
+// IncrementalAuthorization request/response types
+#[derive(Debug, Serialize)]
+pub struct PaypalIncrementalAuthRequest {
+    amount: OrderAmount,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaypalIncrementalAuthResponse {
+    id: String,
+    status: PaypalIncrementalStatus,
+    amount: Option<OrderAmount>,
+    invoice_id: Option<String>,
+    network_transaction_reference: Option<PaypalNetworkTransactionReference>,
+}
+
 impl From<PaypalPaymentStatus> for common_enums::AttemptStatus {
     fn from(item: PaypalPaymentStatus) -> Self {
         match item {
@@ -2300,6 +2317,74 @@ impl From<PaypalPaymentStatus> for common_enums::AttemptStatus {
             PaypalPaymentStatus::PartiallyCaptured => Self::PartialCharged,
             PaypalPaymentStatus::Voided => Self::Voided,
         }
+    }
+}
+
+// IncrementalAuthorization - TryFrom implementation
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        PaypalRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for PaypalIncrementalAuthRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: PaypalRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let value = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data.request.minor_amount,
+                item.router_data.request.currency,
+            )
+            .change_context(ConnectorError::AmountConversionFailed)?;
+        let amount = OrderAmount {
+            currency_code: item.router_data.request.currency,
+            value,
+        };
+        Ok(Self { amount })
+    }
+}
+
+impl TryFrom<ResponseRouterData<PaypalIncrementalAuthResponse, Self>>
+    for RouterDataV2<
+        IncrementalAuthorization,
+        PaymentFlowData,
+        PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: ResponseRouterData<PaypalIncrementalAuthResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let authorization_status =
+            common_enums::AuthorizationStatus::from(item.response.status.clone());
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+                status: authorization_status,
+                connector_authorization_id: Some(item.response.id),
+                status_code: item.http_code,
+            }),
+            ..item.router_data
+        })
     }
 }
 
