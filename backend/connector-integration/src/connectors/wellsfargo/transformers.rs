@@ -3,11 +3,13 @@ use common_enums::{AttemptStatus, RefundStatus};
 use common_utils::consts;
 use domain_types::payment_method_data::RawCardNumber;
 use domain_types::{
-    connector_flow::{Authorize, Capture, RSync, Refund, SetupMandate, Void},
+    connector_flow::{
+        Authorize, Capture, IncrementalAuthorization, RSync, Refund, SetupMandate, Void,
+    },
     connector_types::{
         PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData, PaymentsCaptureData,
-        PaymentsResponseData, RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData,
-        ResponseId, SetupMandateRequestData,
+        PaymentsIncrementalAuthorizationData, PaymentsResponseData, RefundFlowData, RefundSyncData,
+        RefundsData, RefundsResponseData, ResponseId, SetupMandateRequestData,
     },
     errors,
     payment_method_data::{PaymentMethodData, PaymentMethodDataTypes},
@@ -1737,5 +1739,186 @@ pub fn get_error_reason(
         (None, Some(details), None) => Some(details),
         (None, None, Some(avs_message)) => Some(avs_message),
         (None, None, None) => None,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// INCREMENTAL AUTHORIZATION
+// ----------------------------------------------------------------------------
+
+/// Request body for Wells Fargo incremental authorization
+/// PATCH /pts/v2/payments/{connector_transaction_id}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WellsfargoIncrementalAuthorizationRequest {
+    processing_information: ProcessingInformation,
+    order_information: OrderInformationWithAmount,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderInformationWithAmount {
+    amount_details: AdditionalAmount,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdditionalAmount {
+    additional_amount: common_utils::types::StringMajorUnit,
+    currency: common_enums::Currency,
+}
+
+/// Response body for Wells Fargo incremental authorization
+/// Uses the same structure as WellsfargoPaymentsResponse
+pub type WellsfargoIncrementalAuthorizationResponse = WellsfargoPaymentsResponse;
+
+/// TryFrom implementation for incremental authorization request
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        WellsFargoRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for WellsfargoIncrementalAuthorizationRequest
+{
+    type Error = Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: WellsFargoRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let amount_value = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data.request.minor_amount,
+                item.router_data.request.currency,
+            )
+            .change_context(errors::ConnectorError::AmountConversionFailed)?;
+
+        Ok(Self {
+            processing_information: ProcessingInformation {
+                action_list: None,
+                action_token_types: None,
+                authorization_options: Some(WellsfargoAuthorizationOptions {
+                    initiator: Some(WellsfargoPaymentInitiator {
+                        initiator_type: Some(WellsfargoPaymentInitiatorTypes::Merchant),
+                        credential_stored_on_file: None,
+                        stored_credential_used: Some(true),
+                    }),
+                    merchant_initiated_transaction: Some(MerchantInitiatedTransaction {
+                        reason: Some("5".to_string()), // Reason code for Incremental Authorization
+                        previous_transaction_id: None,
+                        original_authorized_amount: None,
+                    }),
+                }),
+                commerce_indicator: CommerceIndicator::Internet,
+                capture: None,
+                capture_options: None,
+                payment_solution: None,
+            },
+            order_information: OrderInformationWithAmount {
+                amount_details: AdditionalAmount {
+                    additional_amount: amount_value,
+                    currency: item.router_data.request.currency,
+                },
+            },
+        })
+    }
+}
+
+/// Maps Wells Fargo payment status to AuthorizationStatus for incremental authorization
+fn map_incremental_auth_status(
+    status: &Option<WellsfargoPaymentStatus>,
+    error_info: &Option<WellsfargoErrorInformation>,
+) -> common_enums::AuthorizationStatus {
+    match status {
+        Some(WellsfargoPaymentStatus::Authorized)
+        | Some(WellsfargoPaymentStatus::AuthorizedPendingReview)
+        | Some(WellsfargoPaymentStatus::PartialAuthorized) => {
+            common_enums::AuthorizationStatus::Success
+        }
+        Some(WellsfargoPaymentStatus::Pending)
+        | Some(WellsfargoPaymentStatus::PendingReview)
+        | Some(WellsfargoPaymentStatus::PendingAuthentication)
+        | Some(WellsfargoPaymentStatus::Transmitted)
+        | Some(WellsfargoPaymentStatus::Reversed)
+        | Some(WellsfargoPaymentStatus::Voided) => common_enums::AuthorizationStatus::Processing,
+        Some(WellsfargoPaymentStatus::Declined)
+        | Some(WellsfargoPaymentStatus::AuthorizedRiskDeclined)
+        | Some(WellsfargoPaymentStatus::InvalidRequest) => {
+            common_enums::AuthorizationStatus::Failure
+        }
+        None => {
+            if error_info.is_some() {
+                common_enums::AuthorizationStatus::Failure
+            } else {
+                common_enums::AuthorizationStatus::Processing
+            }
+        }
+    }
+}
+
+/// TryFrom implementation for incremental authorization response
+impl TryFrom<ResponseRouterData<WellsfargoIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<
+        IncrementalAuthorization,
+        PaymentFlowData,
+        PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<WellsfargoIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let response = item.response;
+        let authorization_status =
+            map_incremental_auth_status(&response.status, &response.error_information);
+
+        let authorization_response = if let Some(ref error_info) = response.error_information {
+            Err(ErrorResponse {
+                code: error_info
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| consts::NO_ERROR_CODE.to_string()),
+                message: error_info
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| consts::NO_ERROR_MESSAGE.to_string()),
+                reason: error_info.message.clone(),
+                status_code: item.http_code,
+                attempt_status: None,
+                connector_transaction_id: Some(response.id.clone()),
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+            })
+        } else {
+            Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+                status: authorization_status,
+                connector_authorization_id: Some(response.id.clone()),
+                status_code: item.http_code,
+            })
+        };
+
+        Ok(Self {
+            response: authorization_response,
+            resource_common_data: item.router_data.resource_common_data,
+            ..item.router_data
+        })
     }
 }
