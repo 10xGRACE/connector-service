@@ -11,15 +11,15 @@ use common_utils::{
 };
 use domain_types::{
     connector_flow::{
-        Accept, Authorize, Capture, DefendDispute, PSync, Refund, RepeatPayment, SetupMandate,
-        SubmitEvidence, Void,
+        Accept, Authorize, Capture, DefendDispute, IncrementalAuthorization, PSync, Refund,
+        RepeatPayment, SetupMandate, SubmitEvidence, Void,
     },
     connector_types::{
         AcceptDisputeData, DisputeDefendData, DisputeFlowData, DisputeResponseData, EventType,
         MandateReference, MandateReferenceId, PaymentFlowData, PaymentVoidData,
-        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData,
-        RefundFlowData, RefundsData, RefundsResponseData, RepeatPaymentData, ResponseId,
-        SetupMandateRequestData, SubmitEvidenceData,
+        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundsData, RefundsResponseData,
+        RepeatPaymentData, ResponseId, SetupMandateRequestData, SubmitEvidenceData,
     },
     errors,
     payment_method_data::{
@@ -1236,6 +1236,20 @@ pub struct SetupMandateRequest<
 pub struct AdyenVoidRequest {
     merchant_account: Secret<String>,
     reference: String,
+}
+
+#[derive(Default, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdyenIncrementalAuthorizationRequest {
+    pub merchant_account: Secret<String>,
+    pub amount: Amount,
+}
+
+#[derive(Default, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdyenIncrementalAuthorizationResponse {
+    pub status: String,
+    pub psp_reference: Option<String>,
 }
 
 /// Local struct for Adyen split payment data (extracted from metadata)
@@ -3411,6 +3425,82 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 .resource_common_data
                 .connector_request_reference_id
                 .clone(),
+        })
+    }
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        AdyenRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for AdyenIncrementalAuthorizationRequest
+{
+    type Error = Error;
+    fn try_from(
+        item: AdyenRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let auth_type = AdyenAuthType::try_from(&item.router_data.connector_auth_type)?;
+        Ok(Self {
+            merchant_account: auth_type.merchant_account,
+            amount: Amount {
+                currency: item.router_data.request.currency,
+                value: item.router_data.request.minor_amount,
+            },
+        })
+    }
+}
+
+impl TryFrom<ResponseRouterData<AdyenIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<
+        IncrementalAuthorization,
+        PaymentFlowData,
+        PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = Error;
+    fn try_from(
+        value: ResponseRouterData<AdyenIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let ResponseRouterData {
+            response,
+            router_data,
+            http_code,
+        } = value;
+
+        // Since Adyen's amountUpdates API is asynchronous, we map "received" to Processing status
+        let status = common_enums::AuthorizationStatus::Processing;
+
+        let connector_authorization_id = response.psp_reference;
+
+        let payments_response_data = PaymentsResponseData::IncrementalAuthorizationResponse {
+            status,
+            connector_authorization_id,
+            status_code: http_code,
+        };
+
+        Ok(Self {
+            response: Ok(payments_response_data),
+            resource_common_data: PaymentFlowData {
+                status: AttemptStatus::Pending,
+                ..router_data.resource_common_data
+            },
+            ..router_data
         })
     }
 }
