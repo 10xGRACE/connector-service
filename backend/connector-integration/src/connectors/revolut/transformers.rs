@@ -1,10 +1,11 @@
 use crate::connectors::revolut::RevolutRouterData;
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, Refund},
+    connector_flow::{Authorize, Capture, IncrementalAuthorization, PSync, Refund},
     connector_types::{
-        PaymentFlowData, PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData,
-        PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData,
-        ResponseId, WebhookDetailsResponse,
+        PaymentFlowData, PaymentsAuthorizeData, PaymentsCaptureData,
+        PaymentsIncrementalAuthorizationData, PaymentsResponseData, PaymentsSyncData,
+        RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData, ResponseId,
+        WebhookDetailsResponse,
     },
     errors::ConnectorError,
     payment_method_data::PaymentMethodDataTypes,
@@ -998,6 +999,137 @@ impl TryFrom<RevolutWebhookBody> for WebhookDetailsResponse {
             minor_amount_captured: None,
             amount_captured: None,
             network_txn_id: None,
+        })
+    }
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Serialize)]
+pub struct RevolutIncrementalAuthorizationRequest {
+    pub amount: MinorUnit,
+    pub reference: Option<String>,
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RevolutIncrementalAuthorizationResponse {
+    pub id: String,
+    pub token: Secret<String>,
+    pub r#type: RevolutOrderType,
+    pub state: RevolutOrderState,
+    #[serde(with = "custom_serde::iso8601")]
+    pub created_at: PrimitiveDateTime,
+    #[serde(with = "custom_serde::iso8601")]
+    pub updated_at: PrimitiveDateTime,
+    pub description: Option<String>,
+    pub capture_mode: Option<RevolutCaptureMode>,
+    pub cancel_authorised_after: Option<String>,
+    pub amount: MinorUnit,
+    pub outstanding_amount: Option<MinorUnit>,
+    pub refunded_amount: Option<MinorUnit>,
+    pub currency: common_enums::Currency,
+    pub settlement_currency: Option<String>,
+    pub customer: Option<RevolutCustomer>,
+    pub payments: Option<Vec<RevolutPayment>>,
+    pub location_id: Option<String>,
+    pub metadata: Option<Secret<serde_json::Value>>,
+    pub industry_data: Option<Secret<serde_json::Value>>,
+    pub merchant_order_data: Option<RevolutMerchantOrderData>,
+    pub upcoming_payment_data: Option<RevolutUpcomingPaymentData>,
+    pub checkout_url: Option<String>,
+    pub redirect_url: Option<String>,
+    pub shipping: Option<RevolutShipping>,
+    pub enforce_challenge: Option<RevolutEnforceChallengeMode>,
+    pub line_items: Option<Vec<RevolutLineItem>>,
+    pub statement_descriptor_suffix: Option<String>,
+    pub related_order_id: Option<String>,
+    pub incremental_authorisations: Option<Vec<RevolutIncrementalAuthorisation>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevolutIncrementalAuthorisation {
+    pub new_amount: MinorUnit,
+    pub old_amount: MinorUnit,
+    pub state: String,
+    pub reference: Option<String>,
+}
+
+impl<F> TryFrom<ResponseRouterData<RevolutIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<F, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<RevolutIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let response = item.response;
+
+        let status = match response.state {
+            RevolutOrderState::Authorised => AttemptStatus::Authorized,
+            RevolutOrderState::Completed => AttemptStatus::Charged,
+            RevolutOrderState::Failed => AttemptStatus::Failure,
+            RevolutOrderState::Cancelled => AttemptStatus::Voided,
+            RevolutOrderState::Pending => AttemptStatus::AuthenticationPending,
+            RevolutOrderState::Processing => AttemptStatus::Pending,
+        };
+
+        let authorization_status = match response.state {
+            RevolutOrderState::Authorised => common_enums::AuthorizationStatus::Success,
+            RevolutOrderState::Failed => common_enums::AuthorizationStatus::Failure,
+            _ => common_enums::AuthorizationStatus::Processing,
+        };
+
+        let connector_authorization_id = response
+            .incremental_authorisations
+            .as_ref()
+            .and_then(|increments| increments.first())
+            .map(|_| response.id.clone());
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+                status: authorization_status,
+                connector_authorization_id,
+                status_code: 200,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        RevolutRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for RevolutIncrementalAuthorizationRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: RevolutRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+        Ok(Self {
+            amount: router_data.request.minor_amount,
+            reference: router_data.request.reason.clone(),
         })
     }
 }
