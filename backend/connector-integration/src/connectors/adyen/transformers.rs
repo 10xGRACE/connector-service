@@ -11,15 +11,15 @@ use common_utils::{
 };
 use domain_types::{
     connector_flow::{
-        Accept, Authorize, Capture, DefendDispute, PSync, Refund, RepeatPayment, SetupMandate,
-        SubmitEvidence, Void,
+        Accept, Authorize, Capture, DefendDispute, IncrementalAuthorization, PSync, Refund,
+        RepeatPayment, SetupMandate, SubmitEvidence, Void,
     },
     connector_types::{
         AcceptDisputeData, DisputeDefendData, DisputeFlowData, DisputeResponseData, EventType,
         MandateReference, MandateReferenceId, PaymentFlowData, PaymentVoidData,
-        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData,
-        RefundFlowData, RefundsData, RefundsResponseData, RepeatPaymentData, ResponseId,
-        SetupMandateRequestData, SubmitEvidenceData,
+        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundsData, RefundsResponseData,
+        RepeatPaymentData, ResponseId, SetupMandateRequestData, SubmitEvidenceData,
     },
     errors,
     payment_method_data::{
@@ -5328,6 +5328,117 @@ impl<F> TryFrom<ResponseRouterData<AdyenCaptureResponse, Self>>
         })
     }
 }
+
+// ============== IncrementalAuthorization Types and Transformers ==============
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdyenIncrementalAuthorizationRequest {
+    merchant_account: Secret<String>,
+    amount: Amount,
+    reference: String,
+    reason: Option<String>,
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        AdyenRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for AdyenIncrementalAuthorizationRequest
+{
+    type Error = Error;
+    fn try_from(
+        item: AdyenRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let auth_type = AdyenAuthType::try_from(&item.router_data.connector_auth_type)?;
+        let reason =
+            item.router_data
+                .request
+                .reason
+                .clone()
+                .map(|r| match r.to_lowercase().as_str() {
+                    "delayedcharge" | "delayed_charge" => "delayedCharge".to_string(),
+                    "noshow" | "no_show" => "noShow".to_string(),
+                    _ => r,
+                });
+        Ok(Self {
+            merchant_account: auth_type.merchant_account,
+            amount: Amount {
+                currency: item.router_data.request.currency,
+                value: item.router_data.request.minor_amount.to_owned(),
+            },
+            reference: item
+                .router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            reason,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdyenIncrementalAuthorizationResponse {
+    psp_reference: String,
+    status: String,
+    amount: Amount,
+    merchant_account: Secret<String>,
+    payment_psp_reference: String,
+    reference: String,
+}
+
+impl<F> TryFrom<ResponseRouterData<AdyenIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<F, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>
+{
+    type Error = Error;
+    fn try_from(
+        value: ResponseRouterData<AdyenIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let ResponseRouterData {
+            response,
+            router_data,
+            http_code,
+        } = value;
+
+        // Map Adyen status to AuthorizationStatus
+        let status = match response.status.to_lowercase().as_str() {
+            "received" | "authorised" => common_enums::AuthorizationStatus::Success,
+            "refused" | "error" => common_enums::AuthorizationStatus::Failure,
+            _ => common_enums::AuthorizationStatus::Processing,
+        };
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+                status,
+                connector_authorization_id: Some(response.psp_reference),
+                status_code: http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status: AttemptStatus::Pending,
+                ..router_data.resource_common_data
+            },
+            ..router_data
+        })
+    }
+}
+
+// ============== End IncrementalAuthorization ==============
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
     TryFrom<(
