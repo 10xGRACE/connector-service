@@ -1739,3 +1739,189 @@ pub fn get_error_reason(
         (None, None, None) => None,
     }
 }
+
+// INCREMENTAL AUTHORIZATION REQUEST/RESPONSE STRUCTURES
+
+/// Request struct for Wells Fargo incremental authorization
+/// Sends a PATCH request to increase the authorized amount
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WellsfargoIncrementalAuthorizationRequest {
+    processing_information: ProcessingInformation,
+    order_information: OrderInformationIncrementalAuthorization,
+}
+
+/// Order information for incremental authorization
+/// Uses additional_amount (delta) instead of total_amount
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderInformationIncrementalAuthorization {
+    amount_details: AmountIncrementalAuthorization,
+}
+
+/// Amount details for incremental authorization
+/// Uses additionalAmount field and currency as string
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmountIncrementalAuthorization {
+    additional_amount: common_utils::types::StringMajorUnit,
+    currency: String,
+}
+
+/// Response struct for Wells Fargo incremental authorization
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WellsfargoIncrementalAuthorizationResponse {
+    pub id: String,
+    pub status: Option<WellsfargoIncrementalAuthorizationStatus>,
+    pub error_information: Option<WellsfargoErrorInformation>,
+    pub client_reference_information: Option<ClientReferenceInformation>,
+}
+
+/// Status enum for incremental authorization responses
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WellsfargoIncrementalAuthorizationStatus {
+    Authorized,
+    AuthorizedPendingReview,
+    Declined,
+}
+
+// INCREMENTAL AUTHORIZATION REQUEST CONVERSION
+
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        WellsFargoRouterData<
+            RouterDataV2<
+                domain_types::connector_flow::IncrementalAuthorization,
+                PaymentFlowData,
+                domain_types::connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for WellsfargoIncrementalAuthorizationRequest
+{
+    type Error = Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: WellsFargoRouterData<
+            RouterDataV2<
+                domain_types::connector_flow::IncrementalAuthorization,
+                PaymentFlowData,
+                domain_types::connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+        let request = &router_data.request;
+
+        // Amount conversion - minor_amount is the delta/increment amount
+        let additional_amount = item
+            .connector
+            .amount_converter
+            .convert(request.minor_amount, request.currency)
+            .change_context(errors::ConnectorError::AmountConversionFailed)
+            .attach_printable(
+                "Failed to convert additional amount for incremental authorization",
+            )?;
+
+        let amount_details = AmountIncrementalAuthorization {
+            additional_amount,
+            currency: request.currency.to_string(),
+        };
+
+        let order_information = OrderInformationIncrementalAuthorization { amount_details };
+
+        // Processing information for incremental authorization
+        // Reason code "5" indicates incremental authorization
+        let processing_information = ProcessingInformation {
+            commerce_indicator: CommerceIndicator::Internet,
+            capture: None,
+            action_list: None,
+            action_token_types: None,
+            authorization_options: Some(WellsfargoAuthorizationOptions {
+                initiator: Some(WellsfargoPaymentInitiator {
+                    initiator_type: Some(WellsfargoPaymentInitiatorTypes::Merchant),
+                    credential_stored_on_file: None,
+                    stored_credential_used: Some(true),
+                }),
+                merchant_initiated_transaction: Some(MerchantInitiatedTransaction {
+                    reason: Some("5".to_string()),
+                    previous_transaction_id: None,
+                    original_authorized_amount: None,
+                }),
+            }),
+            capture_options: None,
+            payment_solution: None,
+        };
+
+        Ok(Self {
+            processing_information,
+            order_information,
+        })
+    }
+}
+
+// INCREMENTAL AUTHORIZATION RESPONSE CONVERSION
+
+impl TryFrom<ResponseRouterData<WellsfargoIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<
+        domain_types::connector_flow::IncrementalAuthorization,
+        PaymentFlowData,
+        domain_types::connector_types::PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<WellsfargoIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let response = &item.response;
+
+        // Map status from Wells Fargo to internal AuthorizationStatus
+        let authorization_status: common_enums::AuthorizationStatus = match response.status {
+            Some(WellsfargoIncrementalAuthorizationStatus::Authorized)
+            | Some(WellsfargoIncrementalAuthorizationStatus::AuthorizedPendingReview) => {
+                common_enums::AuthorizationStatus::Success
+            }
+            Some(WellsfargoIncrementalAuthorizationStatus::Declined) => {
+                common_enums::AuthorizationStatus::Failure
+            }
+            None => {
+                // Check for error information
+                if response.error_information.is_some() {
+                    common_enums::AuthorizationStatus::Failure
+                } else {
+                    common_enums::AuthorizationStatus::Failure
+                }
+            }
+        };
+
+        // Determine attempt status for resource_common_data first
+        let status = match authorization_status {
+            common_enums::AuthorizationStatus::Success => AttemptStatus::Authorized,
+            common_enums::AuthorizationStatus::Failure => AttemptStatus::Failure,
+            _ => AttemptStatus::Pending,
+        };
+
+        // Build response
+        let response_data = Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+            status: authorization_status,
+            connector_authorization_id: None,
+            status_code: item.http_code,
+        });
+
+        Ok(Self {
+            response: response_data,
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}

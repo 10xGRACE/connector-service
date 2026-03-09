@@ -47,7 +47,8 @@ use serde::Serialize;
 use std::fmt::Debug;
 use time::OffsetDateTime;
 use transformers::{
-    self as wellsfargo, WellsfargoCaptureRequest, WellsfargoPaymentsRequest,
+    self as wellsfargo, WellsfargoCaptureRequest, WellsfargoIncrementalAuthorizationRequest,
+    WellsfargoIncrementalAuthorizationResponse, WellsfargoPaymentsRequest,
     WellsfargoPaymentsResponse, WellsfargoPaymentsResponse as WellsfargoCaptureResponse,
     WellsfargoPaymentsResponse as WellsfargoVoidResponse,
     WellsfargoPaymentsResponse as WellsfargoPSyncResponse,
@@ -194,16 +195,6 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
 
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     ConnectorIntegrationV2<
-        IncrementalAuthorization,
-        PaymentFlowData,
-        PaymentsIncrementalAuthorizationData,
-        PaymentsResponseData,
-    > for Wellsfargo<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
         MandateRevoke,
         PaymentFlowData,
         MandateRevokeRequestData,
@@ -345,6 +336,12 @@ macros::create_all_prerequisites!(
             request_body: WellsfargoZeroMandateRequest<T>,
             response_body: WellsfargoSetupMandateResponse,
             router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: IncrementalAuthorization,
+            request_body: WellsfargoIncrementalAuthorizationRequest,
+            response_body: WellsfargoIncrementalAuthorizationResponse,
+            router_data: RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
         )
     ],
     amount_converters: [
@@ -874,6 +871,43 @@ macros::macro_connector_implementation!(
             Ok(format!(
                 "{}pts/v2/payments",
                 self.connector_base_url(req)
+            ))
+        }
+    }
+);
+
+// IncrementalAuthorization implementation - PATCH request to increment authorized amount
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Wellsfargo,
+    curl_request: Json(WellsfargoIncrementalAuthorizationRequest),
+    curl_response: WellsfargoIncrementalAuthorizationResponse,
+    flow_name: IncrementalAuthorization,
+    resource_common_data: PaymentFlowData,
+    flow_request: PaymentsIncrementalAuthorizationData,
+    flow_response: PaymentsResponseData,
+    http_method: Patch,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            self.build_headers(req)
+        }
+        fn get_url(
+            &self,
+            req: &RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            let connector_payment_id = req.request.connector_transaction_id.get_connector_transaction_id()
+                .change_context(errors::ConnectorError::MissingConnectorTransactionID)
+                .attach_printable("Missing connector transaction ID for incremental authorization")?;
+
+            Ok(format!(
+                "{}pts/v2/payments/{}",
+                self.connector_base_url(req),
+                connector_payment_id
             ))
         }
     }
