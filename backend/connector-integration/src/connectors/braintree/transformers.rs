@@ -8,7 +8,8 @@ use common_utils::{
 };
 use domain_types::{
     connector_flow::{
-        Authorize, Capture, PSync, PaymentMethodToken, RSync, RepeatPayment, SdkSessionToken, Void,
+        Authorize, Capture, IncrementalAuthorization, PSync, PaymentMethodToken, RSync,
+        RepeatPayment, SdkSessionToken, Void,
     },
     connector_types::{
         self, AmountInfo, ApplePayPaymentRequest, ApplePaySessionResponse,
@@ -60,6 +61,7 @@ pub mod constants {
     pub const AUTHORIZE_AND_VAULT_APPLE_PAY_MUTATION: &str = "mutation authorizeApplepay($input: AuthorizePaymentMethodInput!) { authorizePaymentMethod(input: $input) { transaction { id legacyId amount { value currencyCode } status paymentMethod { id } } } }";
     pub const CHARGE_PAYPAL_MUTATION: &str = "mutation ChargePaypal($input: ChargePaymentMethodInput!) { chargePaymentMethod(input: $input) { transaction { id status amount { value currencyCode } } } }";
     pub const AUTHORIZE_PAYPAL_MUTATION: &str = "mutation authorizePaypal($input: AuthorizePaymentMethodInput!) { authorizePaymentMethod(input: $input) { transaction { id legacyId amount { value currencyCode } status } } }";
+    pub const ADJUST_AUTHORIZATION_MUTATION: &str = "mutation adjustAuthorization($input: AdjustAuthorizationInput!) { adjustAuthorization(input: $input) { transaction { id status amount { value currencyCode } } } }";
 }
 
 pub type CardPaymentRequest = GenericBraintreeRequest<VariablePaymentInput>;
@@ -71,6 +73,8 @@ pub type BraintreeRefundRequest = GenericBraintreeRequest<BraintreeRefundVariabl
 pub type BraintreePSyncRequest = GenericBraintreeRequest<PSyncInput>;
 pub type BraintreeRSyncRequest = GenericBraintreeRequest<RSyncInput>;
 pub type BraintreeWalletRequest = GenericBraintreeRequest<GenericVariableInput<WalletPaymentInput>>;
+pub type BraintreeIncrementalAuthorizationRequest =
+    GenericBraintreeRequest<IncrementalAuthorizationInput>;
 
 pub type BraintreeRefundResponse = GenericBraintreeResponse<RefundResponse>;
 pub type BraintreeCaptureResponse = GenericBraintreeResponse<CaptureResponse>;
@@ -2653,6 +2657,178 @@ fn map_transaction_status_to_code(status: &common_enums::TransactionStatus) -> S
 pub enum BraintreeRepeatPaymentResponse {
     PaymentsResponse(Box<PaymentsResponse>),
     ErrorResponse(Box<ErrorResponse>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementalAuthorizationTransactionBody {
+    amount: StringMajorUnit,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementalAuthorizationInputData {
+    transaction_id: String,
+    amount: StringMajorUnit,
+}
+
+pub type IncrementalAuthorizationInput = GenericVariableInput<IncrementalAuthorizationInputData>;
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        BraintreeRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for BraintreeIncrementalAuthorizationRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: BraintreeRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let transaction_id = item
+            .router_data
+            .request
+            .connector_transaction_id
+            .get_connector_transaction_id()
+            .change_context(ConnectorError::MissingConnectorTransactionID)?;
+        let amount = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data.request.minor_amount,
+                item.router_data.request.currency,
+            )
+            .change_context(ConnectorError::AmountConversionFailed)?;
+        let query = constants::ADJUST_AUTHORIZATION_MUTATION.to_string();
+        let variables = IncrementalAuthorizationInput {
+            input: IncrementalAuthorizationInputData {
+                transaction_id,
+                amount,
+            },
+        };
+        Ok(Self { query, variables })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementalAuthorizationTransactionBodyResponse {
+    pub id: String,
+    pub status: BraintreePaymentStatus,
+    pub amount: AmountData,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmountData {
+    pub value: String,
+    pub currency_code: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementalAuthorizationTransactionData {
+    pub transaction: IncrementalAuthorizationTransactionBodyResponse,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncrementalAuthorizationResponseData {
+    pub adjust_authorization: IncrementalAuthorizationTransactionData,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IncrementalAuthorizationResponse {
+    pub data: IncrementalAuthorizationResponseData,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum BraintreeIncrementalAuthorizationResponse {
+    IncrementalAuthorizationResponse(Box<IncrementalAuthorizationResponse>),
+    ErrorResponse(Box<ErrorResponse>),
+}
+
+impl<F>
+    TryFrom<
+        ResponseRouterData<
+            BraintreeIncrementalAuthorizationResponse,
+            RouterDataV2<
+                F,
+                PaymentFlowData,
+                connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+        >,
+    >
+    for RouterDataV2<
+        F,
+        PaymentFlowData,
+        connector_types::PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: ResponseRouterData<
+            BraintreeIncrementalAuthorizationResponse,
+            RouterDataV2<
+                F,
+                PaymentFlowData,
+                connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+        >,
+    ) -> Result<Self, Self::Error> {
+        match item.response {
+            BraintreeIncrementalAuthorizationResponse::ErrorResponse(error_response) => Ok(Self {
+                response: build_error_response(&error_response.errors, item.http_code)
+                    .map_err(|err| *err),
+                ..item.router_data
+            }),
+            BraintreeIncrementalAuthorizationResponse::IncrementalAuthorizationResponse(
+                incr_auth_response,
+            ) => {
+                let transaction_data = incr_auth_response.data.adjust_authorization.transaction;
+                let status = enums::AttemptStatus::from(transaction_data.status.clone());
+                let response = if domain_types::utils::is_payment_failure(status) {
+                    Err(create_failure_error_response(
+                        transaction_data.status,
+                        Some(transaction_data.id),
+                        item.http_code,
+                    ))
+                } else {
+                    Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+                        status: enums::AuthorizationStatus::Success,
+                        connector_authorization_id: Some(transaction_data.id),
+                        status_code: item.http_code,
+                    })
+                };
+                Ok(Self {
+                    resource_common_data: PaymentFlowData {
+                        status,
+                        ..item.router_data.resource_common_data
+                    },
+                    response,
+                    ..item.router_data
+                })
+            }
+        }
+    }
 }
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
