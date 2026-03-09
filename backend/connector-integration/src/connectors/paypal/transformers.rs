@@ -13,7 +13,8 @@ use common_utils::{
 };
 use domain_types::{
     connector_flow::{
-        Authorize, Capture, PSync, PostAuthenticate, RepeatPayment, VerifyWebhookSource,
+        Authorize, Capture, IncrementalAuthorization, PSync, PostAuthenticate, RepeatPayment,
+        VerifyWebhookSource,
     },
     connector_types::{
         AccessTokenResponseData, MandateReference, PaymentFlowData, PaymentsAuthorizeData,
@@ -75,9 +76,10 @@ pub mod auth_headers {
 
 const ORDER_QUANTITY: u16 = 1;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PaypalPaymentIntent {
+    #[default]
     Capture,
     Authorize,
     Authenticate,
@@ -1720,6 +1722,7 @@ pub struct PaypalMeta {
     pub authorize_id: Option<String>,
     pub capture_id: Option<String>,
     pub incremental_authorization_id: Option<String>,
+    #[serde(default)]
     pub psync_flow: PaypalPaymentIntent,
     pub next_action: Option<NextActionCall>,
     pub order_id: Option<String>,
@@ -3392,4 +3395,120 @@ fn get_paypal_error_message(error_code: &str) -> Option<&str> {
 pub struct PaypalAccessTokenErrorResponse {
     pub error: String,
     pub error_description: String,
+}
+
+// ----------------------------------------------------------------------------
+// Incremental Authorization (Reauthorization)
+// ----------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct PaypalIncrementalAuthorizationRequest {
+    pub amount: OrderAmount,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PaypalIncrementalAuthorizationResponse {
+    pub id: String,
+    pub status: PaypalIncrementalStatus,
+    pub amount: OrderAmount,
+    pub seller_protection: Option<SellerProtection>,
+    pub expiration_time: Option<String>,
+    pub create_time: Option<String>,
+    pub update_time: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SellerProtection {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispute_categories: Option<Vec<String>>,
+}
+
+impl TryFrom<ResponseRouterData<PaypalIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<
+        IncrementalAuthorization,
+        PaymentFlowData,
+        domain_types::connector_types::PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<PaypalIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let status = common_enums::AttemptStatus::from(item.response.status.clone());
+
+        // Construct connector metadata with the new incremental authorization ID
+        let connector_metadata = serde_json::json!(PaypalMeta {
+            authorize_id: None,
+            capture_id: None,
+            incremental_authorization_id: Some(item.response.id.clone()),
+            psync_flow: PaypalPaymentIntent::Authorize,
+            next_action: None,
+            order_id: None,
+        });
+
+        Ok(Self {
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id.clone()),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata: Some(connector_metadata),
+                network_txn_id: None,
+                connector_response_reference_id: Some(item.response.id.clone()),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            ..item.router_data
+        })
+    }
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        PaypalRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                domain_types::connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for PaypalIncrementalAuthorizationRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: PaypalRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                domain_types::connector_types::PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let value = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data.request.minor_amount,
+                item.router_data.request.currency,
+            )
+            .change_context(ConnectorError::AmountConversionFailed)?;
+
+        Ok(Self {
+            amount: OrderAmount {
+                currency_code: item.router_data.request.currency,
+                value,
+            },
+        })
+    }
 }
