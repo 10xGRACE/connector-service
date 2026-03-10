@@ -758,6 +758,23 @@ pub struct SamsungPayPaymentInformation {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BankDebitPaymentInformation {
+    bank_account: BankAccount,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankAccount {
+    #[serde(rename = "type")]
+    account_type: String,
+    number: Secret<String>,
+    aba_number: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check_number: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SamsungPayFluidDataValue {
     public_key_hash: Secret<String>,
     version: String,
@@ -786,6 +803,7 @@ pub enum PaymentInformation<
     MandatePayment(Box<MandatePaymentInformation>),
     SamsungPay(Box<SamsungPayPaymentInformation>),
     NetworkToken(Box<NetworkTokenPaymentInformation>),
+    BankDebit(Box<BankDebitPaymentInformation>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2140,12 +2158,14 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 .into()),
             },
             PaymentMethodData::NetworkToken(token_data) => Self::try_from((&item, token_data)),
+            PaymentMethodData::BankDebit(bank_debit_data) => {
+                Self::try_from((&item, bank_debit_data))
+            }
             PaymentMethodData::MandatePayment
             | PaymentMethodData::CardDetailsForNetworkTransactionId(_)
             | PaymentMethodData::CardRedirect(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
-            | PaymentMethodData::BankDebit(_)
             | PaymentMethodData::BankTransfer(_)
             | PaymentMethodData::Crypto(_)
             | PaymentMethodData::Reward
@@ -4919,4 +4939,112 @@ fn convert_metadata_to_merchant_defined_info(
     }
 
     (!result.is_empty()).then_some(result)
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<(
+        &CybersourceRouterData<
+            RouterDataV2<
+                Authorize,
+                PaymentFlowData,
+                PaymentsAuthorizeData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+        payment_method_data::BankDebitData,
+    )> for CybersourcePaymentsRequest<T>
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        (item, bank_debit_data): (
+            &CybersourceRouterData<
+                RouterDataV2<
+                    Authorize,
+                    PaymentFlowData,
+                    PaymentsAuthorizeData<T>,
+                    PaymentsResponseData,
+                >,
+                T,
+            >,
+            payment_method_data::BankDebitData,
+        ),
+    ) -> Result<Self, Self::Error> {
+        let email = item
+            .router_data
+            .resource_common_data
+            .get_billing_email()
+            .or(item.router_data.request.get_email())?;
+        let bill_to = build_bill_to(
+            item.router_data.resource_common_data.get_optional_billing(),
+            email,
+        )?;
+        let order_information = OrderInformationWithBill::try_from((item, Some(bill_to)))?;
+
+        let (account_type, account_number, routing_number) = match bank_debit_data {
+            payment_method_data::BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_type,
+                ..
+            } => {
+                let acc_type = match bank_type {
+                    Some(common_enums::BankType::Checking) => "checking",
+                    Some(common_enums::BankType::Savings) => "savings",
+                    None => "checking",
+                };
+                (acc_type.to_string(), account_number, routing_number)
+            }
+            payment_method_data::BankDebitData::SepaBankDebit { .. }
+            | payment_method_data::BankDebitData::BecsBankDebit { .. }
+            | payment_method_data::BankDebitData::BacsBankDebit { .. }
+            | payment_method_data::BankDebitData::SepaGuaranteedBankDebit { .. } => {
+                Err(ConnectorError::NotSupported {
+                    message: "Only ACH Bank Debit is supported for Cybersource".to_string(),
+                    connector: "Cybersource",
+                })?
+            }
+        };
+
+        let payment_information =
+            PaymentInformation::BankDebit(Box::new(BankDebitPaymentInformation {
+                bank_account: BankAccount {
+                    account_type,
+                    number: account_number,
+                    aba_number: routing_number,
+                    check_number: None,
+                },
+            }));
+
+        let processing_information = ProcessingInformation {
+            capture: Some(matches!(
+                item.router_data.request.capture_method,
+                Some(common_enums::CaptureMethod::Automatic) | None
+            )),
+            payment_solution: None,
+            action_list: None,
+            action_token_types: None,
+            authorization_options: None,
+            capture_options: None,
+            commerce_indicator: String::from("internet"),
+        };
+        let client_reference_information = ClientReferenceInformation::from(item);
+        let merchant_defined_information = convert_metadata_to_merchant_defined_info(
+            item.router_data
+                .request
+                .metadata
+                .clone()
+                .map(|metadata| metadata.expose()),
+            item.router_data.request.merchant_order_id.clone(),
+        );
+
+        Ok(Self {
+            processing_information,
+            payment_information,
+            order_information,
+            client_reference_information,
+            consumer_authentication_information: None,
+            merchant_defined_information,
+        })
+    }
 }
