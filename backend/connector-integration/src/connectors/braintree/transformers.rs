@@ -30,7 +30,7 @@ use domain_types::{
     router_response_types::RedirectForm,
 };
 use error_stack::ResultExt;
-use hyperswitch_masking::{ExposeInterface, Secret};
+use hyperswitch_masking::{ExposeInterface, PeekInterface, Secret};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 use time::PrimitiveDateTime;
@@ -60,6 +60,12 @@ pub mod constants {
     pub const AUTHORIZE_AND_VAULT_APPLE_PAY_MUTATION: &str = "mutation authorizeApplepay($input: AuthorizePaymentMethodInput!) { authorizePaymentMethod(input: $input) { transaction { id legacyId amount { value currencyCode } status paymentMethod { id } } } }";
     pub const CHARGE_PAYPAL_MUTATION: &str = "mutation ChargePaypal($input: ChargePaymentMethodInput!) { chargePaymentMethod(input: $input) { transaction { id status amount { value currencyCode } } } }";
     pub const AUTHORIZE_PAYPAL_MUTATION: &str = "mutation authorizePaypal($input: AuthorizePaymentMethodInput!) { authorizePaymentMethod(input: $input) { transaction { id legacyId amount { value currencyCode } status } } }";
+    // BankDebit mutations for ACH Direct Debit
+    pub const CHARGE_US_BANK_ACCOUNT_MUTATION: &str = "mutation ChargeUsBankAccount($input: ChargeUsBankAccountInput!) { chargeUsBankAccount(input: $input) { transaction { id legacyId amount { value currencyCode } status } } }";
+    pub const AUTHORIZE_US_BANK_ACCOUNT_MUTATION: &str = "mutation AuthorizeUsBankAccount($input: AuthorizeUsBankAccountInput!) { authorizeUsBankAccount(input: $input) { transaction { id legacyId amount { value currencyCode } status } } }";
+    // BankDebit mutations for SEPA Direct Debit
+    pub const CHARGE_SEPA_DIRECT_DEBIT_MUTATION: &str = "mutation ChargeSepaDirectDebit($input: ChargeSepaDirectDebitInput!) { chargeSepaDirectDebit(input: $input) { transaction { id legacyId amount { value currencyCode } status } } }";
+    pub const AUTHORIZE_SEPA_DIRECT_DEBIT_MUTATION: &str = "mutation AuthorizeSepaDirectDebit($input: AuthorizeSepaDirectDebitInput!) { authorizeSepaDirectDebit(input: $input) { transaction { id legacyId amount { value currencyCode } status } } }";
 }
 
 pub type CardPaymentRequest = GenericBraintreeRequest<VariablePaymentInput>;
@@ -75,6 +81,8 @@ pub type BraintreeWalletRequest = GenericBraintreeRequest<GenericVariableInput<W
 pub type BraintreeRefundResponse = GenericBraintreeResponse<RefundResponse>;
 pub type BraintreeCaptureResponse = GenericBraintreeResponse<CaptureResponse>;
 pub type BraintreePSyncResponse = GenericBraintreeResponse<PSyncResponse>;
+pub type BraintreeBankDebitRequest = GenericBraintreeRequest<VariableBankDebitInput>;
+pub type BraintreeBankDebitResponse = GenericBraintreeResponse<BankDebitResponse>;
 
 pub type VariablePaymentInput = GenericVariableInput<PaymentInput>;
 pub type VariableClientTokenInput = GenericVariableInput<InputClientTokenData>;
@@ -83,6 +91,7 @@ pub type VariableCaptureInput = GenericVariableInput<CaptureInputData>;
 pub type BraintreeRefundVariables = GenericVariableInput<BraintreeRefundInput>;
 pub type PSyncInput = GenericVariableInput<TransactionSearchInput>;
 pub type RSyncInput = GenericVariableInput<RefundSearchInput>;
+pub type VariableBankDebitInput = GenericVariableInput<BankDebitInput>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GenericBraintreeRequest<T> {
@@ -117,6 +126,55 @@ pub struct WalletTransactionBody {
 pub struct WalletPaymentInput {
     payment_method_id: Secret<String>,
     transaction: WalletTransactionBody,
+}
+
+// BankDebit-specific types for ACH and SEPA Direct Debit
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankDebitTransactionBody {
+    amount: StringMajorUnit,
+    merchant_account_id: Secret<String>,
+    order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    customer_details: Option<CustomerBody>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AchBankDebitPaymentInput {
+    payment_method_nonce: Secret<String>,
+    transaction: BankDebitTransactionBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ach_mandate: Option<AchMandateInput>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SepaDirectDebitPaymentInput {
+    payment_method_nonce: Secret<String>,
+    transaction: BankDebitTransactionBody,
+    sepa_direct_debit_mandate: SepaMandateInput,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum BankDebitInput {
+    Ach(AchBankDebitPaymentInput),
+    Sepa(SepaDirectDebitPaymentInput),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AchMandateInput {
+    /// The text that the customer agreed to when authorizing the ACH transaction
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SepaMandateInput {
+    /// Indicates whether the mandate is for a one-time or recurring payment
+    mandate_type: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -210,6 +268,7 @@ pub enum BraintreePaymentsRequest {
     CardThreeDs(BraintreeClientTokenRequest),
     Mandate(MandatePaymentRequest),
     Wallet(BraintreeWalletRequest),
+    BankDebit(BraintreeBankDebitRequest),
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,11 +593,97 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .into()),
                 }
             }
+            PaymentMethodData::BankDebit(ref bank_debit_data) => {
+                let amount = item
+                    .connector
+                    .amount_converter
+                    .convert(
+                        item.router_data.request.minor_amount,
+                        item.router_data.request.currency,
+                    )
+                    .change_context(ConnectorError::AmountConversionFailed)?;
+                let order_id = item
+                    .router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone();
+                let merchant_account_id = metadata.merchant_account_id.clone();
+                let is_auto_capture = item.router_data.request.is_auto_capture()?;
+                let email = item
+                    .router_data
+                    .resource_common_data
+                    .get_billing_email()
+                    .ok();
+
+                match bank_debit_data {
+                    domain_types::payment_method_data::BankDebitData::AchBankDebit {
+                        account_number,
+                        routing_number,
+                        bank_account_holder_name: _,
+                        bank_type,
+                        bank_holder_type,
+                        ..
+                    } => {
+                        // Braintree expects a payment method nonce for bank debits
+                        // For ACH, we need to create a nonce from the account details
+                        // The format is typically: tokenusbank_ach_{account_number}_{routing_number}
+                        let payment_method_nonce = Secret::new(format!(
+                            "tokenusbank_ach_{}_{}_{}_{}",
+                            account_number.peek(),
+                            routing_number.peek(),
+                            bank_type
+                                .as_ref()
+                                .map(|t| t.to_string())
+                                .unwrap_or_else(|| "CHECKING".to_string()),
+                            bank_holder_type
+                                .as_ref()
+                                .map(|t| t.to_string())
+                                .unwrap_or_else(|| "PERSONAL".to_string())
+                        ));
+
+                        let query = if is_auto_capture {
+                            constants::CHARGE_US_BANK_ACCOUNT_MUTATION.to_string()
+                        } else {
+                            constants::AUTHORIZE_US_BANK_ACCOUNT_MUTATION.to_string()
+                        };
+
+                        let ach_mandate = Some(AchMandateInput {
+                            text: "I authorize this ACH transaction".to_string(),
+                        });
+
+                        Ok(Self::BankDebit(BraintreeBankDebitRequest {
+                            query,
+                            variables: VariableBankDebitInput {
+                                input: BankDebitInput::Ach(AchBankDebitPaymentInput {
+                                    payment_method_nonce,
+                                    transaction: BankDebitTransactionBody {
+                                        amount,
+                                        merchant_account_id,
+                                        order_id,
+                                        customer_details: email.map(|e| CustomerBody { email: e }),
+                                    },
+                                    ach_mandate,
+                                }),
+                            },
+                        }))
+                    }
+                    domain_types::payment_method_data::BankDebitData::SepaBankDebit { .. }
+                    | domain_types::payment_method_data::BankDebitData::SepaGuaranteedBankDebit {
+                        ..
+                    }
+                    | domain_types::payment_method_data::BankDebitData::BecsBankDebit { .. }
+                    | domain_types::payment_method_data::BankDebitData::BacsBankDebit { .. } => {
+                        Err(ConnectorError::NotImplemented(
+                            "SEPA/BECS/BACS BankDebit is not implemented for braintree".to_string(),
+                        )
+                        .into())
+                    }
+                }
+            }
             PaymentMethodData::MandatePayment
             | PaymentMethodData::CardRedirect(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
-            | PaymentMethodData::BankDebit(_)
             | PaymentMethodData::BankTransfer(_)
             | PaymentMethodData::Crypto(_)
             | PaymentMethodData::Reward
@@ -947,6 +1092,68 @@ impl<F, T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Se
                 }),
                 ..item.router_data
             }),
+            BraintreePaymentsResponse::BankDebitResponse(bank_debit_response) => {
+                // Extract the transaction data from the appropriate field (charge_us_bank_account or authorize_us_bank_account)
+                let transaction_data = bank_debit_response
+                    .data
+                    .charge_us_bank_account
+                    .as_ref()
+                    .map(|t| &t.transaction)
+                    .or_else(|| {
+                        bank_debit_response
+                            .data
+                            .authorize_us_bank_account
+                            .as_ref()
+                            .map(|t| &t.transaction)
+                    })
+                    .or_else(|| {
+                        bank_debit_response
+                            .data
+                            .charge_sepa_direct_debit
+                            .as_ref()
+                            .map(|t| &t.transaction)
+                    })
+                    .or_else(|| {
+                        bank_debit_response
+                            .data
+                            .authorize_sepa_direct_debit
+                            .as_ref()
+                            .map(|t| &t.transaction)
+                    })
+                    .ok_or(ConnectorError::ResponseDeserializationFailed)?;
+
+                let status = enums::AttemptStatus::from(transaction_data.status.clone());
+
+                let response = if domain_types::utils::is_payment_failure(status) {
+                    Err(create_failure_error_response(
+                        transaction_data.status.clone(),
+                        Some(transaction_data.id.clone()),
+                        item.http_code,
+                    ))
+                } else {
+                    Ok(PaymentsResponseData::TransactionResponse {
+                        resource_id: ResponseId::ConnectorTransactionId(
+                            transaction_data.id.clone(),
+                        ),
+                        redirection_data: None,
+                        mandate_reference: None,
+                        connector_metadata: None,
+                        network_txn_id: None,
+                        connector_response_reference_id: transaction_data.legacy_id.clone(),
+                        incremental_authorization_allowed: None,
+                        status_code: item.http_code,
+                    })
+                };
+
+                Ok(Self {
+                    resource_common_data: PaymentFlowData {
+                        status,
+                        ..item.router_data.resource_common_data
+                    },
+                    response,
+                    ..item.router_data
+                })
+            }
         }
     }
 }
@@ -970,6 +1177,41 @@ pub struct WalletDataResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WalletTransactionWrapper {
     pub transaction: WalletTransaction,
+}
+
+// BankDebit response types
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BankDebitResponse {
+    pub data: BankDebitDataResponse,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankDebitDataResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_us_bank_account: Option<BankDebitTransactionWrapper>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorize_us_bank_account: Option<BankDebitTransactionWrapper>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_sepa_direct_debit: Option<BankDebitTransactionWrapper>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorize_sepa_direct_debit: Option<BankDebitTransactionWrapper>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BankDebitTransactionWrapper {
+    pub transaction: BankDebitTransaction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankDebitTransaction {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_id: Option<String>,
+    pub status: BraintreePaymentStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<WalletAmount>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1008,6 +1250,7 @@ pub enum BraintreePaymentsResponse {
     PaymentsResponse(Box<PaymentsResponse>),
     WalletPaymentsResponse(Box<WalletPaymentsResponse>),
     ClientTokenResponse(Box<ClientTokenResponse>),
+    BankDebitResponse(Box<BankDebitResponse>),
     ErrorResponse(Box<ErrorResponse>),
 }
 
