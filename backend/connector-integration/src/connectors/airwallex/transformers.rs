@@ -83,6 +83,7 @@ pub struct AirwallexPaymentRequest {
 pub enum AirwallexPaymentMethod {
     Card(AirwallexCardData),
     BankRedirect(AirwallexBankRedirectData),
+    BankDebit(AirwallexBankDebitData),
 }
 
 #[derive(Debug, Serialize)]
@@ -127,6 +128,7 @@ pub enum AirwallexPaymentType {
     Ideal,
     Skrill,
     BankTransfer,
+    AchDirectDebit,
 }
 
 // BankRedirect-specific data structures
@@ -166,6 +168,25 @@ pub struct AirwallexBlikData {
 #[derive(Debug, Serialize)]
 pub struct AirwallexBlikDetails {
     pub shopper_name: Secret<String>,
+}
+
+// BankDebit-specific data structures for ACH Direct Debit
+#[derive(Debug, Serialize)]
+pub struct AirwallexBankDebitData {
+    pub ach_direct_debit: AirwallexAchDirectDebitDetails,
+    #[serde(rename = "type")]
+    pub payment_method_type: AirwallexPaymentType,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AirwallexAchDirectDebitDetails {
+    pub account_number: Secret<String>,
+    pub routing_number: Secret<String>,
+    pub account_holder_name: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_holder_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -367,6 +388,48 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .into())
                 }
             },
+            domain_types::payment_method_data::PaymentMethodData::BankDebit(bank_debit_data) => {
+                match bank_debit_data {
+                    domain_types::payment_method_data::BankDebitData::AchBankDebit {
+                        account_number,
+                        routing_number,
+                        bank_account_holder_name,
+                        bank_holder_type,
+                        bank_type,
+                        ..
+                    } => {
+                        let account_holder_name = bank_account_holder_name
+                            .or_else(|| {
+                                item.router_data
+                                    .resource_common_data
+                                    .get_billing_full_name()
+                                    .ok()
+                            })
+                            .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                                field_name: "bank_account_holder_name",
+                            })?;
+
+                        AirwallexPaymentMethod::BankDebit(AirwallexBankDebitData {
+                            ach_direct_debit: AirwallexAchDirectDebitDetails {
+                                account_number,
+                                routing_number,
+                                account_holder_name,
+                                account_holder_type: bank_holder_type
+                                    .map(|t| t.to_string().to_lowercase()),
+                                account_type: bank_type.map(|t| t.to_string().to_lowercase()),
+                            },
+                            payment_method_type: AirwallexPaymentType::AchDirectDebit,
+                        })
+                    }
+                    _ => {
+                        return Err(errors::ConnectorError::NotSupported {
+                            message: "Only ACH Bank Debit is supported for Airwallex".to_string(),
+                            connector: "Airwallex",
+                        }
+                        .into())
+                    }
+                }
+            }
             _ => {
                 return Err(errors::ConnectorError::NotSupported {
                     message: "Payment Method".to_string(),
@@ -1116,6 +1179,48 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .into())
                 }
             },
+            domain_types::payment_method_data::PaymentMethodData::BankDebit(bank_debit_data) => {
+                match bank_debit_data {
+                    domain_types::payment_method_data::BankDebitData::AchBankDebit {
+                        account_number,
+                        routing_number,
+                        bank_account_holder_name,
+                        bank_holder_type,
+                        bank_type,
+                        ..
+                    } => {
+                        let account_holder_name = bank_account_holder_name
+                            .or_else(|| {
+                                item.router_data
+                                    .resource_common_data
+                                    .get_billing_full_name()
+                                    .ok()
+                            })
+                            .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                                field_name: "bank_account_holder_name",
+                            })?;
+
+                        AirwallexPaymentMethod::BankDebit(AirwallexBankDebitData {
+                            ach_direct_debit: AirwallexAchDirectDebitDetails {
+                                account_number,
+                                routing_number,
+                                account_holder_name,
+                                account_holder_type: bank_holder_type
+                                    .map(|t| t.to_string().to_lowercase()),
+                                account_type: bank_type.map(|t| t.to_string().to_lowercase()),
+                            },
+                            payment_method_type: AirwallexPaymentType::AchDirectDebit,
+                        })
+                    }
+                    _ => {
+                        return Err(errors::ConnectorError::NotSupported {
+                            message: "Only ACH Bank Debit is supported for Airwallex".to_string(),
+                            connector: "Airwallex",
+                        }
+                        .into())
+                    }
+                }
+            }
             _ => {
                 return Err(errors::ConnectorError::NotSupported {
                     message: "Payment Method".to_string(),
