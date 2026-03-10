@@ -13,7 +13,9 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+    },
     router_data::{ConnectorSpecificAuth, ErrorResponse},
     router_data_v2::RouterDataV2,
     utils,
@@ -155,6 +157,35 @@ pub enum Source<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'sta
         signature: Secret<String>,
         version: String,
     },
+    SepaBankDebit {
+        sepa: SepaBankDebitData,
+    },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SepaBankDebitData {
+    pub iban: Secret<String>,
+    pub name: Secret<String>,
+    pub mandate: SepaMandate,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SepaMandate {
+    pub reference: String,
+    pub signature_date: String,
+    #[serde(rename = "type")]
+    pub mandate_type: SepaMandateType,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SepaMandateType {
+    Single,
+    FirstCollection,
+    RecurringCollection,
+    FinalCollection,
 }
 
 #[derive(Debug, Serialize)]
@@ -556,10 +587,74 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     },
                 ))
             }
+            PaymentMethodData::BankDebit(BankDebitData::SepaBankDebit {
+                iban,
+                bank_account_holder_name,
+            }) => {
+                let holder_name = bank_account_holder_name.clone().ok_or(
+                    ConnectorError::MissingRequiredField {
+                        field_name: "bank_account_holder_name",
+                    },
+                )?;
+
+                // Generate mandate reference and use current date for signature
+                let mandate_reference = format!(
+                    "HSWITCH-{}",
+                    item.router_data
+                        .resource_common_data
+                        .connector_request_reference_id
+                );
+                let signature_date = time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Iso8601::DATE)
+                    .map_err(|_| ConnectorError::RequestEncodingFailed)?;
+
+                Ok(FiservCheckoutChargesRequest::Charges(
+                    ChargesPaymentRequest {
+                        source: Source::SepaBankDebit {
+                            sepa: SepaBankDebitData {
+                                iban,
+                                name: holder_name,
+                                mandate: SepaMandate {
+                                    reference: mandate_reference,
+                                    signature_date,
+                                    mandate_type: SepaMandateType::Single,
+                                },
+                            },
+                        },
+                        transaction_details: TransactionDetails {
+                            capture_flag: Some(matches!(
+                                item.router_data.request.capture_method,
+                                Some(enums::CaptureMethod::Automatic)
+                                    | Some(enums::CaptureMethod::SequentialAutomatic)
+                                    | None
+                            )),
+                            reversal_reason_code: None,
+                            merchant_transaction_id: Some(
+                                item.router_data
+                                    .resource_common_data
+                                    .connector_request_reference_id
+                                    .clone(),
+                            ),
+                            operation_type: None,
+                        },
+                        transaction_interaction: Some(TransactionInteraction {
+                            origin: TransactionInteractionOrigin::Ecom,
+                            eci_indicator: TransactionInteractionEciIndicator::ChannelEncrypted,
+                            pos_condition_code:
+                                TransactionInteractionPosConditionCode::CardNotPresentEcom,
+                        }),
+                    },
+                ))
+            }
             PaymentMethodData::Wallet(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
-            | PaymentMethodData::BankDebit(_)
+            | PaymentMethodData::BankDebit(
+                BankDebitData::AchBankDebit { .. }
+                | BankDebitData::BecsBankDebit { .. }
+                | BankDebitData::BacsBankDebit { .. }
+                | BankDebitData::SepaGuaranteedBankDebit { .. },
+            )
             | PaymentMethodData::CardRedirect(_)
             | PaymentMethodData::BankTransfer(_)
             | PaymentMethodData::Crypto(_)
