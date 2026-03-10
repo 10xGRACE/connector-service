@@ -42,10 +42,12 @@ pub struct ThreeDSecureReqData {
 }
 
 #[derive(Debug, Serialize, Default, Deserialize, Clone, Eq, PartialEq)]
-#[serde(rename_all = "UPPERCASE")]
 pub enum PaymentMethodId {
     #[default]
+    #[serde(rename = "CARD")]
     Card,
+    #[serde(rename = "CA")]
+    Caixa,
 }
 
 #[derive(Debug, Serialize, Default, Deserialize, Clone, Eq, PartialEq)]
@@ -66,10 +68,14 @@ pub struct DlocalPaymentsRequest<
     pub payment_method_id: PaymentMethodId,
     pub payment_method_flow: PaymentMethodFlow,
     pub payer: Payer,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub card: Option<Card<T>>,
     pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub three_dsecure: Option<ThreeDSecureReqData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub callback_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
@@ -153,12 +159,41 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 };
                 Ok(payment_request)
             }
+            PaymentMethodData::BankTransfer(_) => {
+                let amount = utils::convert_amount(
+                    item.connector.amount_converter,
+                    item.router_data.request.minor_amount,
+                    item.router_data.request.currency,
+                )?;
+                // For Brazil, use Caixa bank (CA) as the default bank transfer method
+                let payment_request = Self {
+                    amount,
+                    currency: item.router_data.request.currency,
+                    payment_method_id: PaymentMethodId::Caixa,
+                    payment_method_flow: PaymentMethodFlow::ReDirect,
+                    country,
+                    payer: Payer {
+                        name,
+                        email,
+                        document: get_doc_from_currency(country.to_string()),
+                    },
+                    card: None,
+                    order_id: item
+                        .router_data
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                    three_dsecure: None,
+                    callback_url: Some(item.router_data.request.get_router_return_url()?),
+                    description: item.router_data.resource_common_data.description.clone(),
+                };
+                Ok(payment_request)
+            }
             PaymentMethodData::CardRedirect(_)
             | PaymentMethodData::Wallet(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
             | PaymentMethodData::BankDebit(_)
-            | PaymentMethodData::BankTransfer(_)
             | PaymentMethodData::Crypto(_)
             | PaymentMethodData::MandatePayment
             | PaymentMethodData::Reward

@@ -383,7 +383,16 @@ macros::macro_connector_implementation!(
             &self,
             req: &RouterDataV2<Authorize, PaymentFlowData, PaymentsAuthorizeData<T>, PaymentsResponseData>,
         ) -> CustomResult<String, errors::ConnectorError> {
-            Ok(format!("{}secure_payments", self.connector_base_url_payments(req)))
+            let base_url = self.connector_base_url_payments(req);
+            // For card payments use /secure_payments, for bank transfers use /payments
+            match req.request.payment_method_data {
+                domain_types::payment_method_data::PaymentMethodData::Card(_) => {
+                    Ok(format!("{}secure_payments", base_url))
+                }
+                _ => {
+                    Ok(format!("{}payments", base_url))
+                }
+            }
         }
     }
 );
