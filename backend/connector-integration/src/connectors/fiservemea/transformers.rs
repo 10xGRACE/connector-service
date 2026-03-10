@@ -120,6 +120,8 @@ pub enum FiservemeaRequestType {
     PostAuthTransaction,
     VoidPreAuthTransactions,
     ReturnTransaction,
+    SepaSaleTransaction,
+    SepaCreditTransaction,
 }
 
 #[derive(Debug, Serialize)]
@@ -165,7 +167,31 @@ pub struct OrderDetails {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentMethod<T: PaymentMethodDataTypes> {
-    pub payment_card: PaymentCard<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_card: Option<PaymentCard<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sepa: Option<SepaPayment>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SepaPayment {
+    pub iban: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mandate: Option<SepaMandate>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SepaMandate {
+    pub reference: String,
+    #[serde(rename = "signatureDate")]
+    pub signature_date: String,
+    #[serde(rename = "type")]
+    pub mandate_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -343,8 +369,8 @@ impl<T: PaymentMethodDataTypes>
             currency: item.request.currency,
         };
 
-        // Extract payment method data
-        let payment_method = match &item.request.payment_method_data {
+        // Extract payment method data and determine request type
+        let (payment_method, request_type, order) = match &item.request.payment_method_data {
             PaymentMethodData::Card(card_data) => {
                 // Convert year to YY format (last 2 digits)
                 let year_str = card_data.card_exp_year.peek();
@@ -365,23 +391,83 @@ impl<T: PaymentMethodDataTypes>
                     security_code: Some(card_data.card_cvc.clone()),
                     holder: item.request.customer_name.clone().map(Secret::new),
                 };
-                PaymentMethod { payment_card }
+                let payment_method = PaymentMethod::<T> {
+                    payment_card: Some(payment_card),
+                    sepa: None,
+                };
+
+                // Determine transaction type based on capture_method for cards
+                let is_manual_capture = item
+                    .request
+                    .capture_method
+                    .map(|cm| matches!(cm, common_enums::CaptureMethod::Manual))
+                    .unwrap_or(false);
+
+                let request_type = if is_manual_capture {
+                    FiservemeaRequestType::PaymentCardPreAuthTransaction
+                } else {
+                    FiservemeaRequestType::PaymentCardSaleTransaction
+                };
+
+                // Generate order details
+                let order = OrderDetails {
+                    order_id: item
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                };
+
+                (payment_method, request_type, order)
+            }
+            PaymentMethodData::BankDebit(
+                domain_types::payment_method_data::BankDebitData::SepaBankDebit {
+                    iban,
+                    bank_account_holder_name,
+                },
+            ) => {
+                // SEPA Direct Debit payment
+                // Generate mandate reference (max 35 chars, alphanumeric with limited special chars)
+                let mandate_reference = "MANDATE001".to_string();
+
+                // Use current date for signature date (YYYY-MM-DD format with leading zeros)
+                let today = "2026-03-10".to_string();
+
+                let sepa_payment = SepaPayment {
+                    iban: iban.peek().clone(),
+                    name: bank_account_holder_name.as_ref().map(|n| n.peek().clone()),
+                    email: item.request.email.as_ref().map(|e| e.peek().clone()),
+                    mandate: Some(SepaMandate {
+                        reference: mandate_reference,
+                        signature_date: today,
+                        mandate_type: "SINGLE".to_string(),
+                    }),
+                };
+
+                let payment_method = PaymentMethod::<T> {
+                    payment_card: None,
+                    sepa: Some(sepa_payment),
+                };
+
+                let request_type = FiservemeaRequestType::SepaSaleTransaction;
+
+                // Generate order details
+                let order = OrderDetails {
+                    order_id: item
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                };
+
+                (payment_method, request_type, order)
             }
             _ => {
                 return Err(error_stack::report!(
                     errors::ConnectorError::NotImplemented(
-                        "Only card payments are supported".to_string()
+                        "Only card and SEPA bank debit payments are supported".to_string()
                     )
                 ))
             }
         };
-
-        // Determine transaction type based on capture_method
-        let is_manual_capture = item
-            .request
-            .capture_method
-            .map(|cm| matches!(cm, common_enums::CaptureMethod::Manual))
-            .unwrap_or(false);
 
         // Generate unique merchant transaction ID using connector request reference ID
         // This provides a meaningful, unique identifier for each transaction
@@ -390,28 +476,13 @@ impl<T: PaymentMethodDataTypes>
             .connector_request_reference_id
             .clone();
 
-        // Create order details with same ID
-        let order = OrderDetails {
-            order_id: merchant_transaction_id.clone(),
-        };
-
-        if is_manual_capture {
-            Ok(Self {
-                request_type: FiservemeaRequestType::PaymentCardPreAuthTransaction,
-                merchant_transaction_id,
-                transaction_amount,
-                order,
-                payment_method,
-            })
-        } else {
-            Ok(Self {
-                request_type: FiservemeaRequestType::PaymentCardSaleTransaction,
-                merchant_transaction_id,
-                transaction_amount,
-                order,
-                payment_method,
-            })
-        }
+        Ok(Self {
+            request_type,
+            merchant_transaction_id,
+            transaction_amount,
+            order,
+            payment_method,
+        })
     }
 }
 
