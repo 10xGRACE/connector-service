@@ -641,6 +641,7 @@ pub enum PaymentSourceItem<
     Eps(RedirectRequest),
     Giropay(RedirectRequest),
     Sofort(RedirectRequest),
+    Bank(BankPaymentSource),
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CardVaultResponse {
@@ -1108,7 +1109,17 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 Self::try_from(card_redirect_data)
             }
             PaymentMethodData::PayLater(ref paylater_data) => Self::try_from(paylater_data),
-            PaymentMethodData::BankDebit(ref bank_debit_data) => Self::try_from(bank_debit_data),
+            PaymentMethodData::BankDebit(ref bank_debit_data) => {
+                // ACH Direct Debit requires auto-capture - verify this is set correctly
+                if !item.router_data.request.is_auto_capture()? {
+                    return Err(ConnectorError::NotSupported {
+                        message: "Manual capture is not supported for ACH Direct Debit".to_string(),
+                        connector: "Paypal",
+                    }
+                    .into());
+                }
+                Self::try_from((bank_debit_data, &item))
+            }
             PaymentMethodData::BankTransfer(ref bank_transfer_data) => {
                 Self::try_from(bank_transfer_data.as_ref())
             }
@@ -1173,14 +1184,136 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
     }
 }
 
+// ACH Direct Debit payment source structures
+#[derive(Debug, Serialize)]
+pub struct AchDebitRequest {
+    account_number: Secret<String>,
+    routing_number: Secret<String>,
+    account_holder_name: Option<Secret<String>>,
+    #[serde(rename = "account_type")]
+    account_type: AchAccountType,
+    #[serde(rename = "ownership_type")]
+    ownership_type: AchOwnershipType,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AchAccountType {
+    Checking,
+    Savings,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AchOwnershipType {
+    Personal,
+    Business,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BankPaymentSource {
+    ach_debit: AchDebitRequest,
+}
+
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
-    TryFrom<&BankDebitData> for PaypalPaymentsRequest<T>
+    TryFrom<(
+        &BankDebitData,
+        &PaypalRouterData<
+            RouterDataV2<
+                Authorize,
+                PaymentFlowData,
+                PaymentsAuthorizeData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    )> for PaypalPaymentsRequest<T>
 {
     type Error = error_stack::Report<ConnectorError>;
-    fn try_from(value: &BankDebitData) -> Result<Self, Self::Error> {
-        match value {
-            BankDebitData::AchBankDebit { .. }
-            | BankDebitData::SepaBankDebit { .. }
+    fn try_from(
+        value: (
+            &BankDebitData,
+            &PaypalRouterData<
+                RouterDataV2<
+                    Authorize,
+                    PaymentFlowData,
+                    PaymentsAuthorizeData<T>,
+                    PaymentsResponseData,
+                >,
+                T,
+            >,
+        ),
+    ) -> Result<Self, Self::Error> {
+        let (bank_debit_data, item) = value;
+
+        match bank_debit_data {
+            BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_account_holder_name,
+                bank_type,
+                bank_holder_type,
+                card_holder_name: _,
+                bank_name: _,
+            } => {
+                // ACH Direct Debit requires CAPTURE intent (immediate settlement)
+                let intent = PaypalPaymentIntent::Capture;
+
+                let account_type = match bank_type {
+                    Some(common_enums::BankType::Checking) => AchAccountType::Checking,
+                    Some(common_enums::BankType::Savings) => AchAccountType::Savings,
+                    None => AchAccountType::Checking, // Default to Checking
+                };
+
+                let ownership_type = match bank_holder_type {
+                    Some(common_enums::BankHolderType::Personal) => AchOwnershipType::Personal,
+                    Some(common_enums::BankHolderType::Business) => AchOwnershipType::Business,
+                    None => AchOwnershipType::Personal, // Default to Personal
+                };
+
+                let ach_debit_request = AchDebitRequest {
+                    account_number: account_number.clone(),
+                    routing_number: routing_number.clone(),
+                    account_holder_name: bank_account_holder_name.clone(),
+                    account_type,
+                    ownership_type,
+                };
+
+                let amount = OrderRequestAmount::try_from(item)?;
+                let connector_request_reference_id = item
+                    .router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone();
+                let shipping_address = ShippingAddress::from(item);
+                let item_details = vec![ItemDetails::try_from(item)?];
+
+                let paypal_auth: PaypalAuthType =
+                    PaypalAuthType::try_from(&item.router_data.connector_auth_type)?;
+                let payee = get_payee(&paypal_auth);
+
+                let purchase_units = vec![PurchaseUnitRequest {
+                    reference_id: Some(connector_request_reference_id.clone()),
+                    custom_id: item.router_data.request.merchant_order_id.clone(),
+                    invoice_id: Some(connector_request_reference_id),
+                    amount,
+                    payee,
+                    shipping: Some(shipping_address),
+                    items: item_details,
+                }];
+
+                // Create bank payment source using untagged enum
+                let payment_source = Some(PaymentSourceItem::Bank(BankPaymentSource {
+                    ach_debit: ach_debit_request,
+                }));
+
+                Ok(Self {
+                    intent,
+                    purchase_units,
+                    payment_source,
+                })
+            }
+            BankDebitData::SepaBankDebit { .. }
             | BankDebitData::SepaGuaranteedBankDebit { .. }
             | BankDebitData::BecsBankDebit { .. }
             | BankDebitData::BacsBankDebit { .. } => Err(ConnectorError::NotImplemented(
