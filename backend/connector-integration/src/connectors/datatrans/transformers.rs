@@ -10,7 +10,9 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+    },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
 };
@@ -20,7 +22,8 @@ use serde::{Deserialize, Serialize};
 // Error message constants
 const DEFAULT_ERROR_CODE: &str = "UNKNOWN_ERROR";
 const DEFAULT_ERROR_MESSAGE: &str = "Unknown error occurred";
-const UNSUPPORTED_PAYMENT_METHOD_ERROR: &str = "Only card payments are supported for Datatrans";
+const UNSUPPORTED_PAYMENT_METHOD_ERROR: &str =
+    "Only card and SEPA ELV payments are supported for Datatrans";
 
 #[derive(Debug, Clone)]
 pub struct DatatransAuthType {
@@ -119,7 +122,11 @@ pub struct DatatransPaymentsRequest<
     pub currency: Currency,
     pub refno: String,
     pub amount: MinorUnit,
-    pub card: DatatransCard<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<DatatransCard<T>>,
+    // Datatrans API expects uppercase "ELV" field name
+    #[serde(rename = "ELV", skip_serializing_if = "Option::is_none")]
+    pub elv: Option<DatatransElv>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_settle: Option<bool>,
     // Don't skip serializing - we want "option": null to appear in JSON
@@ -132,6 +139,15 @@ pub struct DatatransPaymentsRequest<
 pub struct DatatransPaymentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_alias: Option<bool>,
+}
+
+// SEPA ELV (Direct Debit) details for Datatrans API
+// Datatrans uses uppercase "ELV" field name for the property
+// Only "iban" field is required - cardholder seems to cause issues
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatatransElv {
+    pub iban: Secret<String>,
 }
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
@@ -161,23 +177,6 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         >,
     ) -> Result<Self, Self::Error> {
         let router_data = &item.router_data;
-        // Extract card data
-        let card_data = match &router_data.request.payment_method_data {
-            PaymentMethodData::Card(card) => card,
-            _ => Err(errors::ConnectorError::NotImplemented(
-                UNSUPPORTED_PAYMENT_METHOD_ERROR.to_string(),
-            ))?,
-        };
-
-        // Build card object - for authorize flow we use card details directly
-        let card = DatatransCard {
-            alias: None, // Alias is used for stored credentials, not for direct authorization
-            number: Some(card_data.card_number.clone()),
-            expiry_month: Some(card_data.card_exp_month.clone()),
-            expiry_year: Some(card_data.get_card_expiry_year_2_digit()?),
-            cvv: Some(card_data.card_cvc.clone()),
-            card_type: Some("PLAIN".to_string()), // Set card type to PLAIN to match Hyperswitch
-        };
 
         // Determine auto_settle based on capture method
         let auto_settle = match router_data.request.capture_method {
@@ -186,17 +185,90 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             _ => None, // Let connector decide default behavior
         };
 
-        Ok(Self {
-            currency: router_data.request.currency,
-            refno: router_data
-                .resource_common_data
-                .connector_request_reference_id
-                .clone(),
-            amount: router_data.request.minor_amount,
-            card,
-            auto_settle,
-            option: None, // Set to null to match Hyperswitch
-        })
+        match &router_data.request.payment_method_data {
+            PaymentMethodData::Card(card_data) => {
+                // Build card object - for authorize flow we use card details directly
+                let card = DatatransCard {
+                    alias: None, // Alias is used for stored credentials, not for direct authorization
+                    number: Some(card_data.card_number.clone()),
+                    expiry_month: Some(card_data.card_exp_month.clone()),
+                    expiry_year: Some(card_data.get_card_expiry_year_2_digit()?),
+                    cvv: Some(card_data.card_cvc.clone()),
+                    card_type: Some("PLAIN".to_string()), // Set card type to PLAIN to match Hyperswitch
+                };
+
+                Ok(Self {
+                    currency: router_data.request.currency,
+                    refno: router_data
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                    amount: router_data.request.minor_amount,
+                    card: Some(card),
+                    elv: None,
+                    auto_settle,
+                    option: None,
+                })
+            }
+            PaymentMethodData::BankDebit(bank_debit_data) => {
+                // Handle SEPA ELV (Electronic Direct Debit) for Datatrans
+                let (iban, account_holder) = match bank_debit_data {
+                    BankDebitData::SepaBankDebit {
+                        iban,
+                        bank_account_holder_name,
+                    } => {
+                        let holder_name = match bank_account_holder_name {
+                            Some(name) => Some(name.clone()),
+                            None => router_data
+                                .resource_common_data
+                                .get_billing_full_name()
+                                .ok(),
+                        };
+                        (iban.clone(), holder_name)
+                    }
+                    BankDebitData::SepaGuaranteedBankDebit {
+                        iban,
+                        bank_account_holder_name,
+                    } => {
+                        let holder_name = match bank_account_holder_name {
+                            Some(name) => Some(name.clone()),
+                            None => router_data
+                                .resource_common_data
+                                .get_billing_full_name()
+                                .ok(),
+                        };
+                        (iban.clone(), holder_name)
+                    }
+                    BankDebitData::AchBankDebit { .. }
+                    | BankDebitData::BecsBankDebit { .. }
+                    | BankDebitData::BacsBankDebit { .. } => {
+                        return Err(error_stack::report!(errors::ConnectorError::NotImplemented(
+                            "Only SEPA ELV (Electronic Direct Debit) is supported for Datatrans".to_string(),
+                        )));
+                    }
+                };
+
+                let elv = DatatransElv { iban };
+
+                Ok(Self {
+                    currency: router_data.request.currency,
+                    refno: router_data
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                    amount: router_data.request.minor_amount,
+                    card: None,
+                    elv: Some(elv),
+                    auto_settle,
+                    option: None,
+                })
+            }
+            _ => Err(error_stack::report!(
+                errors::ConnectorError::NotImplemented(
+                    UNSUPPORTED_PAYMENT_METHOD_ERROR.to_string(),
+                )
+            )),
+        }
     }
 }
 
