@@ -258,7 +258,13 @@ macros::macro_connector_implementation!(
             &self,
             req: &RouterDataV2<Authorize, PaymentFlowData, PaymentsAuthorizeData<T>, PaymentsResponseData>,
         ) -> CustomResult<String, ConnectorError> {
-            Ok(format!("{}pegasus-ci/api/gateway/init-iframe", self.connector_base_url_payments(req)))
+            use domain_types::payment_method_data::PaymentMethodData;
+            let base_url = self.connector_base_url_payments(req);
+            let url = match &req.request.payment_method_data {
+                PaymentMethodData::BankDebit(_) => format!("{}api/payments/pab", base_url),
+                _ => format!("{}pegasus-ci/api/gateway/init-iframe", base_url),
+            };
+            Ok(url)
         }
         fn get_5xx_error_response(
         &self,
