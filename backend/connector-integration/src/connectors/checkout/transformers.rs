@@ -83,6 +83,10 @@ pub struct WalletSource {
 const ACH_PAYMENT_TYPE: &str = "ach";
 const ACH_COUNTRY_US: &str = "US";
 
+/// Constants for SEPA payment type
+const SEPA_PAYMENT_TYPE: &str = "sepa";
+const SEPA_CURRENCY_EUR: &str = "EUR";
+
 /// Checkout.com ACH account holder type (mapped from common_enums::BankHolderType)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -130,6 +134,39 @@ pub struct MandateSource {
     pub billing_address: Option<CheckoutAddress>,
 }
 
+/// SEPA Direct Debit account holder information
+#[derive(Debug, Serialize)]
+pub struct SepaAccountHolder {
+    pub first_name: Option<Secret<String>>,
+    pub last_name: Option<Secret<String>>,
+    pub billing_address: Option<CheckoutAddress>,
+}
+
+/// SEPA Direct Debit source type (Core or B2B)
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SepaMandateType {
+    Core,
+    B2b,
+}
+
+/// SEPA Direct Debit payment source
+#[derive(Debug, Serialize)]
+pub struct SepaBankDebitSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub country: String,
+    pub account_number: Secret<String>,
+    pub currency: String,
+    #[serde(rename = "mandate_id")]
+    pub mandate_id: Option<String>,
+    #[serde(rename = "mandate_type")]
+    pub mandate_type: Option<SepaMandateType>,
+    #[serde(rename = "date_of_signature")]
+    pub date_of_signature: Option<String>,
+    pub account_holder: Option<SepaAccountHolder>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CheckoutRawCardDetails {
     #[serde(rename = "type")]
@@ -154,6 +191,7 @@ pub enum PaymentSource<
     MandatePayment(MandateSource),
     GooglePayPredecrypt(Box<GooglePayPredecrypt>),
     AchBankDebit(AchBankDebitSource),
+    SepaBankDebit(SepaBankDebitSource),
 }
 
 #[derive(Debug, Serialize)]
@@ -630,6 +668,83 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 };
                 Ok((payment_source, None, Some(false), store_for_future))
             }
+            PaymentMethodData::BankDebit(BankDebitData::SepaBankDebit {
+                iban,
+                bank_account_holder_name,
+            }) => {
+                // Get account holder name from bank_account_holder_name or billing details
+                let holder_name = bank_account_holder_name.or_else(|| {
+                    item.router_data
+                        .resource_common_data
+                        .get_billing_full_name()
+                        .ok()
+                });
+
+                // Split account holder name into first and last name
+                let (first_name, last_name) = match holder_name {
+                    Some(name) => split_account_holder_name(Some(name)),
+                    None => (None, None),
+                };
+
+                // Get billing country from address or default to DE for SEPA
+                let country = item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_country()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "DE".to_string());
+
+                // Build billing address for SEPA
+                let billing_address = Some(CheckoutAddress {
+                    city: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_city(),
+                    address_line1: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_line1(),
+                    address_line2: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_line2(),
+                    state: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_state(),
+                    zip: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_zip(),
+                    country: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_country(),
+                });
+
+                let payment_source = PaymentSource::SepaBankDebit(SepaBankDebitSource {
+                    source_type: SEPA_PAYMENT_TYPE.to_string(),
+                    country,
+                    account_number: iban.clone(),
+                    currency: SEPA_CURRENCY_EUR.to_string(),
+                    mandate_id: None, // Optional for one-time payments
+                    mandate_type: Some(SepaMandateType::Core),
+                    date_of_signature: None, // Optional - can be provided if available
+                    account_holder: Some(SepaAccountHolder {
+                        first_name,
+                        last_name,
+                        billing_address,
+                    }),
+                });
+
+                // For SEPA bank debit, we typically want to store for future use if it's a mandate payment
+                let store_for_future = if item.router_data.request.is_mandate_payment() {
+                    Some(true)
+                } else {
+                    store_for_future_use
+                };
+                Ok((payment_source, None, Some(false), store_for_future))
+            }
             _ => Err(ConnectorError::NotImplemented(
                 utils::get_unimplemented_payment_method_error_message("checkout"),
             )),
@@ -1071,6 +1186,76 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     account_number: account_number.clone(),
                     routing_number: routing_number.clone(),
                     account_holder,
+                });
+                Ok((payment_source, None, Some(false), payment_type, Some(true)))
+            }
+            PaymentMethodData::BankDebit(BankDebitData::SepaBankDebit {
+                iban,
+                bank_account_holder_name,
+            }) => {
+                // Get account holder name from bank_account_holder_name or billing details
+                let holder_name = bank_account_holder_name.or_else(|| {
+                    item.router_data
+                        .resource_common_data
+                        .get_billing_full_name()
+                        .ok()
+                });
+
+                // Split account holder name into first and last name
+                let (first_name, last_name) = match holder_name {
+                    Some(name) => split_account_holder_name(Some(name)),
+                    None => (None, None),
+                };
+
+                // Get billing country from address or default to DE for SEPA
+                let country = item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_country()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "DE".to_string());
+
+                // Build billing address for SEPA
+                let billing_address = Some(CheckoutAddress {
+                    city: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_city(),
+                    address_line1: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_line1(),
+                    address_line2: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_line2(),
+                    state: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_state(),
+                    zip: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_zip(),
+                    country: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_country(),
+                });
+
+                let payment_source = PaymentSource::SepaBankDebit(SepaBankDebitSource {
+                    source_type: SEPA_PAYMENT_TYPE.to_string(),
+                    country,
+                    account_number: iban.clone(),
+                    currency: SEPA_CURRENCY_EUR.to_string(),
+                    mandate_id: None,
+                    mandate_type: Some(SepaMandateType::Core),
+                    date_of_signature: None,
+                    account_holder: Some(SepaAccountHolder {
+                        first_name,
+                        last_name,
+                        billing_address,
+                    }),
                 });
                 Ok((payment_source, None, Some(false), payment_type, Some(true)))
             }
