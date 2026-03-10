@@ -271,6 +271,17 @@ pub struct HipayPaymentsRequest {
     pub notify_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication_indicator: Option<String>,
+    // SEPA Direct Debit fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iban: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firstname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lastname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eci: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recurring_payment: Option<String>,
 }
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
@@ -303,6 +314,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         // Priority order (matching Hyperswitch):
         // 1. For tokenized cards: Use connector_customer (contains domestic_network from tokenization)
         // 2. For raw cards: Map card_network enum to HiPay payment products
+        // 3. For BankDebit: Use SEPA Direct Debit (sdd) payment product
         let payment_product = match &item.router_data.request.payment_method_data {
             PaymentMethodData::Card(card_data) => {
                 // Map card network to HiPay payment product
@@ -333,6 +345,22 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .connector_customer
                     .clone()
                     .unwrap_or_default() // Empty string fallback
+            }
+            PaymentMethodData::BankDebit(bank_debit_data) => {
+                // SEPA Direct Debit support
+                match bank_debit_data {
+                    domain_types::payment_method_data::BankDebitData::SepaBankDebit { .. } => {
+                        "sdd".to_string()
+                    }
+                    _ => {
+                        return Err(errors::ConnectorError::NotImplemented(
+                            "BankDebit payment method not supported".to_string(),
+                        ))
+                        .change_context(
+                            errors::ConnectorError::NotImplemented("Payment method".to_string()),
+                        )
+                    }
+                }
             }
             _ => {
                 return Err(errors::ConnectorError::NotImplemented(
@@ -405,6 +433,50 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             .clone()
             .unwrap_or_else(|| "Short Description".to_string());
 
+        // Extract SEPA Direct Debit fields if payment method is BankDebit
+        let (iban, firstname, lastname, eci, recurring_payment) =
+            match &item.router_data.request.payment_method_data {
+                PaymentMethodData::BankDebit(
+                    domain_types::payment_method_data::BankDebitData::SepaBankDebit {
+                        iban: iban_secret,
+                        bank_account_holder_name,
+                    },
+                ) => {
+                    let iban_value = iban_secret.peek().to_string();
+                    // Extract firstname and lastname from bank_account_holder_name or billing address
+                    let holder_name = bank_account_holder_name
+                        .as_ref()
+                        .map(|name| name.peek().to_string())
+                        .or_else(|| {
+                            item.router_data
+                                .resource_common_data
+                                .get_optional_billing_full_name()
+                                .map(|name| name.peek().to_string())
+                        })
+                        .unwrap_or_default();
+
+                    let (first, last) = if holder_name.is_empty() {
+                        ("".to_string(), "".to_string())
+                    } else {
+                        let parts: Vec<&str> = holder_name.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            (parts[0].to_string(), parts[1..].join(" "))
+                        } else {
+                            (holder_name.clone(), "".to_string())
+                        }
+                    };
+
+                    (
+                        Some(iban_value),
+                        Some(first),
+                        Some(last),
+                        Some("7".to_string()),
+                        Some("1".to_string()),
+                    )
+                }
+                _ => (None, None, None, None, None),
+            };
+
         Ok(Self {
             payment_product,
             orderid: item
@@ -423,6 +495,11 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             cancel_url,
             notify_url,
             authentication_indicator,
+            iban,
+            firstname,
+            lastname,
+            eci,
+            recurring_payment,
         })
     }
 }
