@@ -326,6 +326,52 @@ pub struct CreditCardDetails<T: PaymentMethodDataTypes> {
 #[serde(rename_all = "camelCase")]
 pub enum PaymentDetails<T: PaymentMethodDataTypes> {
     CreditCard(CreditCardDetails<T>),
+    ECheck(ECheckDetails),
+}
+
+/// eCheck payment details for ACH/BankDebit
+#[skip_serializing_none]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ECheckDetails {
+    account_type: ECheckAccountType,
+    routing_number: String,
+    account_number: Secret<String>,
+    name_on_account: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bank_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check_number: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    echeck_type: Option<ECheckType>,
+}
+
+/// eCheck account types
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ECheckAccountType {
+    Checking,
+    Savings,
+    #[serde(rename = "businessChecking")]
+    BusinessChecking,
+}
+
+/// ACH/eCheck transaction types
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ECheckType {
+    #[serde(rename = "ARC")]
+    Arc,
+    #[serde(rename = "BOC")]
+    Boc,
+    #[serde(rename = "CCD")]
+    Ccd,
+    #[serde(rename = "PPD")]
+    Ppd,
+    #[serde(rename = "TEL")]
+    Tel,
+    #[serde(rename = "WEB")]
+    Web,
 }
 
 #[skip_serializing_none]
@@ -563,27 +609,79 @@ fn create_regular_transaction_request<
     >,
     currency: api_enums::Currency,
 ) -> Result<AuthorizedotnetTransactionRequest<T>, Error> {
-    let card_data = match &item.router_data.request.payment_method_data {
-        PaymentMethodData::Card(card) => Ok(card),
-        _ => Err(ConnectorError::RequestEncodingFailed),
-    }?;
+    // Handle different payment method types
+    let payment_details = match &item.router_data.request.payment_method_data {
+        PaymentMethodData::Card(card_data) => {
+            let expiry_month = card_data.card_exp_month.peek().clone();
+            let year = card_data.card_exp_year.peek().clone();
+            let expiry_year = if year.len() == 2 {
+                format!("20{year}")
+            } else {
+                year
+            };
+            let expiration_date = format!("{expiry_year}-{expiry_month}");
 
-    let expiry_month = card_data.card_exp_month.peek().clone();
-    let year = card_data.card_exp_year.peek().clone();
-    let expiry_year = if year.len() == 2 {
-        format!("20{year}")
-    } else {
-        year
+            let credit_card_details = CreditCardDetails {
+                card_number: card_data.card_number.clone(),
+                expiration_date: Secret::new(expiration_date),
+                card_code: Some(card_data.card_cvc.clone()),
+            };
+
+            PaymentDetails::CreditCard(credit_card_details)
+        }
+        PaymentMethodData::BankDebit(bank_debit_data) => {
+            match bank_debit_data {
+                domain_types::payment_method_data::BankDebitData::AchBankDebit {
+                    account_number,
+                    routing_number,
+                    bank_account_holder_name,
+                    bank_type,
+                    ..
+                } => {
+                    // Map bank_type to eCheck account type
+                    let account_type = match bank_type {
+                        Some(common_enums::BankType::Savings) => ECheckAccountType::Savings,
+                        Some(common_enums::BankType::Checking) | None => {
+                            ECheckAccountType::Checking
+                        }
+                    };
+
+                    // Get name on account
+                    let name_on_account = bank_account_holder_name
+                        .as_ref()
+                        .map(|n| n.peek().clone())
+                        .unwrap_or_else(|| {
+                            item.router_data
+                                .request
+                                .get_optional_email()
+                                .map(|e| e.peek().clone())
+                                .unwrap_or_default()
+                        });
+
+                    let echeck_details = ECheckDetails {
+                        account_type,
+                        routing_number: routing_number.peek().clone(),
+                        account_number: account_number.clone(),
+                        name_on_account,
+                        bank_name: None,
+                        check_number: None,
+                        echeck_type: Some(ECheckType::Web), // WEB is standard for web-initiated payments
+                    };
+
+                    PaymentDetails::ECheck(echeck_details)
+                }
+                _ => {
+                    return Err(error_stack::report!(ConnectorError::NotSupported {
+                        message: "Only ACH Bank Debit is supported for Authorize.Net".to_string(),
+                        connector: "authorizedotnet",
+                    }));
+                }
+            }
+        }
+        _ => {
+            return Err(error_stack::report!(ConnectorError::RequestEncodingFailed));
+        }
     };
-    let expiration_date = format!("{expiry_year}-{expiry_month}");
-
-    let credit_card_details = CreditCardDetails {
-        card_number: card_data.card_number.clone(),
-        expiration_date: Secret::new(expiration_date),
-        card_code: Some(card_data.card_cvc.clone()),
-    };
-
-    let payment_details = PaymentDetails::CreditCard(credit_card_details);
 
     let transaction_type = match item.router_data.request.capture_method {
         Some(enums::CaptureMethod::Manual) => TransactionType::AuthOnlyTransaction,
