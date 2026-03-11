@@ -7,7 +7,9 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+    },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
     utils,
@@ -94,6 +96,14 @@ pub struct PlacetopayPaymentsRequest<
 }
 
 #[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum PlacetopayInstrument<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+{
+    Card(PlacetopayCard<T>),
+    Account(PlacetopayAccountInstrument),
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlacetopayPayment {
     reference: String,
@@ -110,10 +120,34 @@ pub struct PlacetopayAmount {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PlacetopayInstrument<
-    T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize,
-> {
-    card: PlacetopayCard<T>,
+pub struct PlacetopayAccountInstrument {
+    account: PlacetopayAccount,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacetopayAccount {
+    bank_code: String,
+    bank_name: Option<String>,
+    account_type: PlacetopayAccountType,
+    account_number: Secret<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum PlacetopayAccountType {
+    Sav,
+    Dda,
+    Ccd,
+}
+
+impl From<common_enums::BankType> for PlacetopayAccountType {
+    fn from(bank_type: common_enums::BankType) -> Self {
+        match bank_type {
+            common_enums::BankType::Savings => Self::Sav,
+            common_enums::BankType::Checking => Self::Dda,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -180,16 +214,56 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     user_agent,
                     auth,
                     payment,
-                    instrument: PlacetopayInstrument {
-                        card: card.to_owned(),
-                    },
+                    instrument: PlacetopayInstrument::Card(card),
+                })
+            }
+            PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_account_holder_name,
+                bank_type,
+                ..
+            }) => {
+                // Map bank type to Placetopay account type
+                let account_type = bank_type
+                    .map(PlacetopayAccountType::from)
+                    .unwrap_or(PlacetopayAccountType::Dda);
+
+                // Use routing number as bank code
+                let bank_code = routing_number.peek().clone();
+
+                // Build bank name from holder name if available
+                let bank_name = bank_account_holder_name
+                    .as_ref()
+                    .map(|name| name.peek().clone());
+
+                let account = PlacetopayAccount {
+                    bank_code,
+                    bank_name,
+                    account_type,
+                    account_number: account_number.clone(),
+                };
+
+                Ok(Self {
+                    ip_address,
+                    user_agent,
+                    auth,
+                    payment,
+                    instrument: PlacetopayInstrument::Account(PlacetopayAccountInstrument {
+                        account,
+                    }),
                 })
             }
             PaymentMethodData::Wallet(_)
             | PaymentMethodData::CardRedirect(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
-            | PaymentMethodData::BankDebit(_)
+            | PaymentMethodData::BankDebit(
+                BankDebitData::SepaBankDebit { .. }
+                | BankDebitData::SepaGuaranteedBankDebit { .. }
+                | BankDebitData::BecsBankDebit { .. }
+                | BankDebitData::BacsBankDebit { .. },
+            )
             | PaymentMethodData::BankTransfer(_)
             | PaymentMethodData::Crypto(_)
             | PaymentMethodData::MandatePayment
