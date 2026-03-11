@@ -9,11 +9,11 @@ use common_utils::{
     types::{AmountConvertor, FloatMajorUnit, FloatMajorUnitForConnector},
 };
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, RSync, Refund, Void},
+    connector_flow::{Authorize, Capture, PSync, RSync, Refund, RepeatPayment, Void},
     connector_types::{
-        PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData, PaymentsCaptureData,
-        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
-        RefundsResponseData, ResponseId,
+        MandateReferenceId, PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData,
+        PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData, RefundFlowData,
+        RefundSyncData, RefundsData, RefundsResponseData, RepeatPaymentData, ResponseId,
     },
     errors,
     payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
@@ -1149,6 +1149,227 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
     fn try_from(
         item: AuthipayRouterData<
             RouterDataV2<Refund, RefundFlowData, RefundsData, RefundsResponseData>,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        Self::try_from(&item.router_data)
+    }
+}
+
+// ===== REPEAT PAYMENT (MIT) REQUEST STRUCTURE =====
+// Used for Merchant Initiated Transactions using stored credentials (Data Vault)
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthipayRepeatPaymentRequest<T: PaymentMethodDataTypes> {
+    pub request_type: AuthipayRequestType,
+    pub merchant_transaction_id: String,
+    pub transaction_amount: TransactionAmount,
+    pub order: OrderDetails,
+    pub payment_method: StoredCredentialPaymentMethod,
+    #[serde(skip)]
+    _phantom: std::marker::PhantomData<T>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCredentialPaymentMethod {
+    pub payment_token: PaymentTokenData,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentTokenData {
+    pub value: String,
+    pub reusable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Secret<String>>,
+}
+
+// ===== REPEAT PAYMENT REQUEST TRANSFORMATION =====
+// MIT (Merchant Initiated Transaction) uses stored credentials (Data Vault token)
+
+impl<T: PaymentMethodDataTypes>
+    TryFrom<
+        &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+    > for AuthipayRepeatPaymentRequest<T>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: &RouterDataV2<
+            RepeatPayment,
+            PaymentFlowData,
+            RepeatPaymentData<T>,
+            PaymentsResponseData,
+        >,
+    ) -> Result<Self, Self::Error> {
+        // Use FloatMajorUnitForConnector to properly convert minor to major unit
+        let converter = FloatMajorUnitForConnector;
+        let amount_major = converter
+            .convert(item.request.minor_amount, item.request.currency)
+            .change_context(errors::ConnectorError::RequestEncodingFailed)?;
+
+        let transaction_amount = TransactionAmount {
+            total: amount_major,
+            currency: item.request.currency,
+        };
+
+        // Extract stored credential token from mandate_reference
+        let token_value = match &item.request.mandate_reference {
+            MandateReferenceId::ConnectorMandateId(connector_mandate) => connector_mandate
+                .get_connector_mandate_id()
+                .ok_or_else(|| {
+                    error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                        field_name: "connector_mandate_id"
+                    })
+                })?,
+            MandateReferenceId::NetworkMandateId(network_txn_id) => {
+                // Use network transaction ID for network mandates
+                network_txn_id.clone()
+            }
+            MandateReferenceId::NetworkTokenWithNTI(_) => {
+                return Err(error_stack::report!(
+                    errors::ConnectorError::NotImplemented(
+                        "Network token with NTI not supported for authipay".to_string()
+                    )
+                ));
+            }
+        };
+
+        // Determine transaction type based on capture_method
+        let is_manual_capture = item
+            .request
+            .capture_method
+            .map(|cm| matches!(cm, common_enums::CaptureMethod::Manual))
+            .unwrap_or(false);
+
+        // Generate unique merchant transaction ID using connector request reference ID
+        let merchant_transaction_id = item
+            .resource_common_data
+            .connector_request_reference_id
+            .clone();
+
+        // Create order details with same ID
+        let order = OrderDetails {
+            order_id: merchant_transaction_id.clone(),
+        };
+
+        // Get cardholder name from payment method data or email
+        let holder = item
+            .request
+            .email
+            .as_ref()
+            .map(|email| Secret::new(email.peek().clone()));
+
+        let payment_token = PaymentTokenData {
+            value: token_value,
+            reusable: true, // MIT tokens are typically reusable
+            holder,
+        };
+
+        let payment_method = StoredCredentialPaymentMethod { payment_token };
+
+        if is_manual_capture {
+            Ok(Self {
+                request_type: AuthipayRequestType::PaymentCardPreAuthTransaction,
+                merchant_transaction_id,
+                transaction_amount,
+                order,
+                payment_method,
+                _phantom: std::marker::PhantomData,
+            })
+        } else {
+            Ok(Self {
+                request_type: AuthipayRequestType::PaymentCardSaleTransaction,
+                merchant_transaction_id,
+                transaction_amount,
+                order,
+                payment_method,
+                _phantom: std::marker::PhantomData,
+            })
+        }
+    }
+}
+
+// ===== REPEAT PAYMENT RESPONSE TRANSFORMATION =====
+// Reuses AuthipayPaymentsResponse structure from authorize flow
+
+impl<T: PaymentMethodDataTypes> TryFrom<ResponseRouterData<AuthipayPaymentsResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<AuthipayPaymentsResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Map transaction status using status/result, state, AND transaction type
+        let status = map_status(
+            item.response.transaction_status.clone(),
+            item.response.transaction_result.clone(),
+            item.response.transaction_state.clone(),
+            item.response.transaction_type.clone(),
+        );
+
+        // Extract connector metadata from payment token using helper function
+        let connector_metadata = extract_connector_metadata(item.response.payment_token.as_ref());
+
+        // Extract network-specific fields from processor object using helper function
+        let (network_txn_id, _network_decline_code, _network_error_message) =
+            extract_network_fields(item.response.processor.as_ref());
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(
+                    item.response.ipg_transaction_id.clone(),
+                ),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata,
+                network_txn_id: network_txn_id.or(item.response.api_trace_id.clone()),
+                connector_response_reference_id: item.response.client_request_id.clone(),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+// ===== TYPE ALIASES FOR FLOW COMPATIBILITY =====
+// Each flow needs its own unique response type alias for macro compatibility
+// They all point to the same underlying structure
+pub type AuthipayRepeatPaymentResponse = AuthipayPaymentsResponse;
+
+// ===== TRYFROM IMPLEMENTATIONS FOR MACRO COMPATIBILITY =====
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        AuthipayRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for AuthipayRepeatPaymentRequest<T>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: AuthipayRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
             T,
         >,
     ) -> Result<Self, Self::Error> {
