@@ -195,6 +195,34 @@ pub struct BluesnapAchAuthorizeRequest {
 pub enum BluesnapAuthorizeRequest {
     Card(BluesnapPaymentsRequest),
     Ach(BluesnapAchAuthorizeRequest),
+    Sepa(BluesnapSepaAuthorizeRequest),
+}
+
+// ===== SEPA DIRECT DEBIT STRUCTURES =====
+
+// SEPA transaction data structure
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BluesnapSepaTransaction {
+    pub iban: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bic: Option<String>,
+}
+
+// SEPA-specific authorize request structure
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BluesnapSepaAuthorizeRequest {
+    pub sepa_direct_debit_transaction: BluesnapSepaTransaction,
+    pub amount: StringMajorUnit,
+    pub currency: String,
+    pub authorized_by_shopper: bool,
+    pub payer_info: BluesnapPayerInfo,
+    pub merchant_transaction_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_descriptor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_fraud_info: Option<TransactionFraudInfo>,
 }
 
 // ===== 3DS AUTHENTICATION STRUCTURES =====

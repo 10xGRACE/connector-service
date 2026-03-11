@@ -30,8 +30,8 @@ pub use requests::{
     BluesnapCardHolderInfo, BluesnapCompletePaymentsRequest, BluesnapCreditCard,
     BluesnapEcpTransaction, BluesnapMetadata, BluesnapPayerInfo, BluesnapPaymentMethodDetails,
     BluesnapPaymentsRequest, BluesnapPaymentsTokenRequest, BluesnapRefundRequest,
-    BluesnapThreeDSecureInfo, BluesnapTxnType, BluesnapVoidRequest, BluesnapWallet,
-    RequestMetadata, TransactionFraudInfo,
+    BluesnapSepaAuthorizeRequest, BluesnapSepaTransaction, BluesnapThreeDSecureInfo,
+    BluesnapTxnType, BluesnapVoidRequest, BluesnapWallet, RequestMetadata, TransactionFraudInfo,
 };
 
 // Re-export response types
@@ -424,8 +424,52 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                         transaction_fraud_info,
                     }))
                 }
+                BankDebitData::SepaBankDebit {
+                    iban,
+                    bank_account_holder_name: _,
+                } => {
+                    // Get payer info from billing address (required for SEPA)
+                    let address_details = billing_address
+                        .and_then(|addr| addr.address.as_ref())
+                        .ok_or_else(|| {
+                            error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                                field_name: "billing_address"
+                            })
+                        })?;
+
+                    let payer_info = get_payer_info(address_details)?;
+
+                    let amount = super::BluesnapAmountConvertor::convert(
+                        router_data.request.minor_amount,
+                        router_data.request.currency,
+                    )?;
+
+                    let transaction_fraud_info = Some(TransactionFraudInfo {
+                        fraud_session_id: router_data
+                            .resource_common_data
+                            .connector_request_reference_id
+                            .clone(),
+                    });
+
+                    Ok(Self::Sepa(BluesnapSepaAuthorizeRequest {
+                        sepa_direct_debit_transaction: BluesnapSepaTransaction {
+                            iban: iban.clone(),
+                            bic: None, // Optional field
+                        },
+                        amount,
+                        currency: router_data.request.currency.to_string(),
+                        authorized_by_shopper: true,
+                        payer_info,
+                        merchant_transaction_id: router_data
+                            .resource_common_data
+                            .connector_request_reference_id
+                            .clone(),
+                        soft_descriptor: None,
+                        transaction_fraud_info,
+                    }))
+                }
                 _ => Err(errors::ConnectorError::NotImplemented(
-                    "Only ACH Bank Debit is supported".to_string(),
+                    "Only ACH and SEPA Bank Debit are supported".to_string(),
                 ))?,
             },
             _ => Err(errors::ConnectorError::NotImplemented(
