@@ -6,7 +6,9 @@ use domain_types::{
         RefundFlowData, RefundsData, RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData},
+    payment_method_data::{
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData,
+    },
     router_data::{ConnectorSpecificAuth, ErrorResponse},
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
@@ -165,6 +167,16 @@ pub struct PaymentMethod<T: PaymentMethodDataTypes + Debug + Sync + Send + 'stat
     pub fields: Option<PaymentFields<T>>,
     pub address: Option<Address>,
     pub digital_wallet: Option<RapydWallet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ach: Option<RapydAchDetails>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RapydAchDetails {
+    pub account_number: Secret<String>,
+    pub routing_number: Secret<String>,
+    pub account_type: String,
+    pub account_holder_name: Secret<String>,
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -262,6 +274,7 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     }),
                     address: None,
                     digital_wallet: None,
+                    ach: None,
                 })
             }
             PaymentMethodData::Wallet(ref wallet_data) => {
@@ -296,6 +309,43 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     fields: None,
                     address: None,
                     digital_wallet,
+                    ach: None,
+                })
+            }
+            PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                ref account_number,
+                ref routing_number,
+                ref bank_account_holder_name,
+                bank_type,
+                ..
+            }) => {
+                // Map bank_type to Rapyd ACH type
+                let account_type = match bank_type {
+                    Some(common_enums::BankType::Savings) => "savings".to_string(),
+                    _ => "checking".to_string(),
+                };
+
+                // Get account holder name
+                let account_holder_name = bank_account_holder_name
+                    .clone()
+                    .or_else(|| {
+                        item.router_data
+                            .resource_common_data
+                            .get_optional_billing_full_name()
+                    })
+                    .unwrap_or(Secret::new("".to_string()));
+
+                Some(PaymentMethod {
+                    pm_type: "us_ach_bank".to_string(), // Rapyd ACH payment method type
+                    fields: None,
+                    address: None,
+                    digital_wallet: None,
+                    ach: Some(RapydAchDetails {
+                        account_number: account_number.clone(),
+                        routing_number: routing_number.clone(),
+                        account_type,
+                        account_holder_name,
+                    }),
                 })
             }
             _ => None,
