@@ -8,7 +8,7 @@ use domain_types::{
     },
     errors,
     payment_method_data::{
-        BankTransferData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+        BankDebitData, BankTransferData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
     },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
@@ -707,6 +707,56 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     other => {
                         return Err(errors::ConnectorError::NotSupported {
                             message: format!("{:?} is not supported for Nuvei", other),
+                            connector: "nuvei",
+                        }
+                        .into())
+                    }
+                }
+            }
+            PaymentMethodData::BankDebit(bank_debit_data) => {
+                match bank_debit_data {
+                    BankDebitData::AchBankDebit {
+                        account_number,
+                        routing_number,
+                        bank_account_holder_name: _,
+                        bank_type,
+                        bank_holder_type,
+                        ..
+                    } => {
+                        // Construct SEC code from bank_type and bank_holder_type
+                        let sec_code = match (bank_holder_type, bank_type) {
+                            (
+                                Some(common_enums::BankHolderType::Personal),
+                                Some(common_enums::BankType::Checking),
+                            ) => Some("PPD".to_string()),
+                            (
+                                Some(common_enums::BankHolderType::Personal),
+                                Some(common_enums::BankType::Savings),
+                            ) => Some("PPD".to_string()),
+                            (
+                                Some(common_enums::BankHolderType::Business),
+                                Some(common_enums::BankType::Checking),
+                            ) => Some("CCD".to_string()),
+                            (
+                                Some(common_enums::BankHolderType::Business),
+                                Some(common_enums::BankType::Savings),
+                            ) => Some("CCD".to_string()),
+                            _ => None,
+                        };
+
+                        NuveiPaymentOption {
+                            card: None,
+                            alternative_payment_method: Some(NuveiAlternativePaymentMethod {
+                                payment_method: "apmgw_ACH".to_string(),
+                                account_number: account_number.clone(),
+                                routing_number: routing_number.clone(),
+                                sec_code,
+                            }),
+                        }
+                    }
+                    _ => {
+                        return Err(errors::ConnectorError::NotSupported {
+                            message: "Only ACH Bank Debit is supported for Nuvei".to_string(),
                             connector: "nuvei",
                         }
                         .into())
