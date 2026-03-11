@@ -1,10 +1,11 @@
 use common_utils::{pii, types::StringMajorUnit};
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, RSync, Refund, Void},
+    connector_flow::{Authorize, Capture, PSync, RSync, Refund, RepeatPayment, SetupMandate, Void},
     connector_types::{
-        PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData, PaymentsCaptureData,
-        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
-        RefundsResponseData, ResponseId,
+        MandateReference, MandateReferenceId, PaymentFlowData, PaymentVoidData,
+        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData,
+        RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData, RepeatPaymentData,
+        ResponseId, SetupMandateRequestData,
     },
     errors,
     payment_method_data::{
@@ -1720,6 +1721,702 @@ impl TryFrom<ResponseRouterData<NuveiVoidResponse, Self>>
             connector_metadata: None,
             network_txn_id: None,
             connector_response_reference_id: None,
+            incremental_authorization_allowed: None,
+            status_code: item.http_code,
+        };
+
+        Ok(Self {
+            resource_common_data: PaymentFlowData {
+                status,
+                ..router_data.resource_common_data.clone()
+            },
+            response: Ok(payments_response_data),
+            ..router_data.clone()
+        })
+    }
+}
+
+// ===== MIT (Merchant Initiated Transaction) IMPLEMENTATIONS =====
+// SetupMandate: Initial CIT (Customer Initiated Transaction) that stores credentials
+// RepeatPayment: Subsequent MIT using stored credentials
+
+// SetupMandate Request - Initial transaction to store credentials for future MIT
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NuveiSetupMandateRequest<
+    T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
+> {
+    pub session_token: Option<String>,
+    pub merchant_id: Secret<String>,
+    pub merchant_site_id: Secret<String>,
+    pub client_request_id: String,
+    pub amount: StringMajorUnit,
+    pub currency: common_enums::Currency,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_token_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_unique_id: Option<String>,
+    pub payment_option: NuveiPaymentOption<T>,
+    pub transaction_type: TransactionType,
+    pub device_details: NuveiDeviceDetails,
+    pub billing_address: NuveiBillingAddress,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_details: Option<NuveiUrlDetails>,
+    pub time_stamp: common_utils::date_time::DateTime<common_utils::date_time::YYYYMMDDHHmmss>,
+    pub checksum: String,
+    // MIT-specific fields for initial setup
+    pub is_rebilling: String, // "0" for initial MIT setup
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebilling_type: Option<String>,
+}
+
+// SetupMandate Response
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NuveiSetupMandateResponse {
+    pub order_id: Option<String>,
+    pub transaction_id: Option<String>,
+    pub transaction_status: Option<NuveiTransactionStatus>,
+    pub status: NuveiPaymentStatus,
+    pub err_code: Option<i32>,
+    pub reason: Option<String>,
+    #[serde(rename = "gwErrorCode")]
+    pub gw_error_code: Option<i32>,
+    #[serde(rename = "gwErrorReason")]
+    pub gw_error_reason: Option<String>,
+    pub auth_code: Option<String>,
+    pub session_token: Option<String>,
+    pub client_unique_id: Option<String>,
+    pub client_request_id: Option<String>,
+    pub internal_request_id: Option<i64>,
+    pub payment_option: Option<NuveiPaymentOptionResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NuveiPaymentOptionResponse {
+    pub user_payment_option_id: Option<String>,
+    pub card: Option<NuveiCardResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NuveiCardResponse {
+    pub card_number: Option<String>,
+    pub card_holder_name: Option<String>,
+    pub expiration_month: Option<String>,
+    pub expiration_year: Option<String>,
+}
+
+// RepeatPayment Request - Subsequent MIT using stored credentials
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NuveiRepeatPaymentRequest {
+    pub session_token: Option<String>,
+    pub merchant_id: Secret<String>,
+    pub merchant_site_id: Secret<String>,
+    pub client_request_id: String,
+    pub amount: StringMajorUnit,
+    pub currency: common_enums::Currency,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_token_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_unique_id: Option<String>,
+    // MIT-specific fields for repeat payments
+    pub user_payment_option_id: String,
+    pub is_rebilling: String,   // "1" for subsequent MIT
+    pub rebilling_type: String, // "Recurring", "MIT", "NoShow", "DelayedCharges"
+    pub related_transaction_id: String,
+    pub device_details: NuveiDeviceDetails,
+    pub billing_address: NuveiBillingAddress,
+    pub time_stamp: common_utils::date_time::DateTime<common_utils::date_time::YYYYMMDDHHmmss>,
+    pub checksum: String,
+}
+
+// RepeatPayment Response (same structure as payment response)
+pub type NuveiRepeatPaymentResponse = NuveiPaymentResponse;
+
+// SetupMandate Request Transformation (Initial CIT)
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        NuveiRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for NuveiSetupMandateRequest<T>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: NuveiRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+
+        // Extract auth data
+        let auth = NuveiAuthType::try_from(&router_data.connector_auth_type)?;
+
+        // Extract payment method data (card required for SetupMandate)
+        let payment_option = match &router_data.request.payment_method_data {
+            PaymentMethodData::Card(card_data) => {
+                let card_holder_name = router_data
+                    .resource_common_data
+                    .get_optional_billing_full_name()
+                    .or(router_data.request.customer_name.clone().map(Secret::new))
+                    .ok_or(errors::ConnectorError::MissingRequiredField {
+                        field_name: "billing_address.first_name and billing_address.last_name or customer_name",
+                    })?;
+
+                NuveiPaymentOption {
+                    card: Some(NuveiCard {
+                        card_number: card_data.card_number.clone(),
+                        card_holder_name,
+                        expiration_month: card_data.card_exp_month.clone(),
+                        expiration_year: card_data.card_exp_year.clone(),
+                        cvv: card_data.card_cvc.clone(),
+                    }),
+                    alternative_payment_method: None,
+                }
+            }
+            _ => {
+                return Err(errors::ConnectorError::NotSupported {
+                    message: "SetupMandate only supports card payments".to_string(),
+                    connector: "nuvei",
+                }
+                .into())
+            }
+        };
+
+        // Extract billing address
+        let email = router_data
+            .resource_common_data
+            .get_optional_billing_email()
+            .or_else(|| router_data.request.email.clone())
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "billing_address.email",
+            })?;
+
+        let country = router_data
+            .resource_common_data
+            .get_optional_billing_country()
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "billing_address.country",
+            })?;
+
+        let billing_address = NuveiBillingAddress {
+            email,
+            first_name: router_data
+                .resource_common_data
+                .get_optional_billing_first_name(),
+            last_name: router_data
+                .resource_common_data
+                .get_optional_billing_last_name(),
+            country: country.to_string(),
+            phone: router_data
+                .resource_common_data
+                .get_optional_billing_phone_number(),
+            city: router_data.resource_common_data.get_optional_billing_city(),
+            address: router_data
+                .resource_common_data
+                .get_optional_billing_line1(),
+            address_line2: router_data
+                .resource_common_data
+                .get_optional_billing_line2(),
+            address_line3: router_data
+                .resource_common_data
+                .get_optional_billing()
+                .and_then(|billing| billing.address.as_ref())
+                .and_then(|addr| addr.line3.clone()),
+            zip: router_data.resource_common_data.get_optional_billing_zip(),
+            state: router_data
+                .resource_common_data
+                .get_optional_billing_state(),
+        };
+
+        // Get device details
+        let ip_address = router_data
+            .request
+            .browser_info
+            .as_ref()
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "browser_info",
+            })?
+            .ip_address
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "browser_info.ip_address",
+            })?;
+
+        let device_details = NuveiDeviceDetails {
+            ip_address: Secret::new(ip_address.to_string()),
+        };
+
+        let time_stamp = NuveiAuthType::get_timestamp();
+        let client_request_id = router_data
+            .resource_common_data
+            .connector_request_reference_id
+            .clone();
+
+        // Convert amount
+        let amount = item
+            .connector
+            .amount_converter_webhooks
+            .convert(
+                router_data.request.minor_amount.ok_or(
+                    errors::ConnectorError::MissingRequiredField {
+                        field_name: "amount",
+                    },
+                )?,
+                router_data.request.currency,
+            )
+            .change_context(errors::ConnectorError::RequestEncodingFailed)?;
+
+        let currency = router_data.request.currency;
+
+        // Extract session token
+        let session_token = router_data
+            .resource_common_data
+            .session_token
+            .clone()
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "session_token",
+            })?;
+
+        // Determine transaction type
+        let transaction_type =
+            TransactionType::get_from_capture_method(router_data.request.capture_method, &amount);
+
+        // Build urlDetails
+        let url_details =
+            router_data
+                .request
+                .router_return_url
+                .as_ref()
+                .map(|url| NuveiUrlDetails {
+                    success_url: url.clone(),
+                    failure_url: url.clone(),
+                    pending_url: url.clone(),
+                });
+
+        // Generate checksum for SetupMandate (same as payment)
+        let checksum = auth.generate_checksum(&[
+            auth.merchant_id.peek(),
+            auth.merchant_site_id.peek(),
+            &client_request_id,
+            &amount.get_amount_as_string(),
+            &currency.to_string(),
+            &time_stamp.to_string(),
+        ]);
+
+        Ok(Self {
+            session_token: Some(session_token),
+            merchant_id: auth.merchant_id,
+            merchant_site_id: auth.merchant_site_id,
+            client_request_id,
+            amount,
+            currency,
+            user_token_id: None,
+            client_unique_id: Some(
+                router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            ),
+            payment_option,
+            transaction_type,
+            device_details,
+            billing_address,
+            url_details,
+            time_stamp,
+            checksum,
+            is_rebilling: "0".to_string(), // Initial setup
+            rebilling_type: Some("MIT".to_string()),
+        })
+    }
+}
+
+// SetupMandate Response Transformation
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<NuveiSetupMandateResponse, Self>>
+    for RouterDataV2<
+        SetupMandate,
+        PaymentFlowData,
+        SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<NuveiSetupMandateResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let response = &item.response;
+        let router_data = &item.router_data;
+
+        // Check for errors
+        if matches!(response.status, NuveiPaymentStatus::Error) {
+            let error_code = response.err_code.map(|c| c.to_string()).unwrap_or_default();
+            let error_message = response
+                .reason
+                .clone()
+                .unwrap_or_else(|| "Unknown error".to_string());
+
+            return Ok(Self {
+                resource_common_data: PaymentFlowData {
+                    status: common_enums::AttemptStatus::Failure,
+                    ..router_data.resource_common_data.clone()
+                },
+                response: Err(domain_types::router_data::ErrorResponse {
+                    code: error_code,
+                    message: error_message.clone(),
+                    reason: Some(error_message),
+                    status_code: item.http_code,
+                    attempt_status: Some(common_enums::AttemptStatus::Failure),
+                    connector_transaction_id: response.transaction_id.clone(),
+                    network_decline_code: None,
+                    network_advice_code: None,
+                    network_error_message: None,
+                }),
+                ..router_data.clone()
+            });
+        }
+
+        // Map transaction status
+        let status = match response.transaction_status {
+            Some(NuveiTransactionStatus::Approved) => {
+                if router_data.request.confirm {
+                    common_enums::AttemptStatus::Charged
+                } else {
+                    common_enums::AttemptStatus::Authorized
+                }
+            }
+            Some(NuveiTransactionStatus::Declined) => common_enums::AttemptStatus::Failure,
+            Some(NuveiTransactionStatus::Error) => common_enums::AttemptStatus::Failure,
+            Some(NuveiTransactionStatus::Redirect) => {
+                common_enums::AttemptStatus::AuthenticationPending
+            }
+            Some(NuveiTransactionStatus::Pending) => common_enums::AttemptStatus::Pending,
+            _ => {
+                if matches!(response.status, NuveiPaymentStatus::Success) {
+                    common_enums::AttemptStatus::Pending
+                } else {
+                    common_enums::AttemptStatus::Failure
+                }
+            }
+        };
+
+        // Get connector transaction ID
+        let connector_transaction_id = response
+            .transaction_id
+            .clone()
+            .or(response.order_id.clone())
+            .ok_or(errors::ConnectorError::MissingConnectorTransactionID)?;
+
+        // Extract stored credential token (userPaymentOptionId)
+        let mandate_reference = response
+            .payment_option
+            .as_ref()
+            .and_then(|po| po.user_payment_option_id.clone());
+
+        let payments_response_data = PaymentsResponseData::TransactionResponse {
+            resource_id: ResponseId::ConnectorTransactionId(connector_transaction_id),
+            redirection_data: None,
+            mandate_reference: mandate_reference.map(|id| {
+                Box::new(domain_types::connector_types::MandateReference {
+                    connector_mandate_id: Some(id),
+                    payment_method_id: None,
+                    connector_mandate_request_reference_id: None,
+                })
+            }),
+            connector_metadata: None,
+            network_txn_id: None,
+            connector_response_reference_id: response.client_request_id.clone(),
+            incremental_authorization_allowed: None,
+            status_code: item.http_code,
+        };
+
+        Ok(Self {
+            resource_common_data: PaymentFlowData {
+                status,
+                ..router_data.resource_common_data.clone()
+            },
+            response: Ok(payments_response_data),
+            ..router_data.clone()
+        })
+    }
+}
+
+// RepeatPayment Request Transformation (Subsequent MIT)
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        NuveiRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for NuveiRepeatPaymentRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: NuveiRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+
+        // Extract auth data
+        let auth = NuveiAuthType::try_from(&router_data.connector_auth_type)?;
+
+        // Extract stored credential token from mandate_reference
+        let user_payment_option_id = match &router_data.request.mandate_reference {
+            MandateReferenceId::ConnectorMandateId(connector_mandate) => connector_mandate
+                .get_connector_mandate_id()
+                .ok_or_else(|| {
+                    error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                        field_name: "connector_mandate_id"
+                    })
+                })?,
+            _ => {
+                return Err(error_stack::report!(errors::ConnectorError::NotSupported {
+                    message: "Only connector mandate ID is supported for Nuvei MIT".to_string(),
+                    connector: "nuvei",
+                }));
+            }
+        };
+
+        // Extract related transaction ID from the request
+        // Nuvei requires the original transaction ID for MIT payments
+        // This should be provided by the caller in the RepeatPaymentData
+        let related_transaction_id = router_data
+            .request
+            .recurring_mandate_payment_data
+            .as_ref()
+            .and_then(|rmd| rmd.original_payment_authorized_amount.as_ref())
+            .map(|_| {
+                router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone()
+            })
+            .unwrap_or_else(|| {
+                router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone()
+            });
+
+        // Get billing address from resource_common_data or use defaults
+        let email = router_data
+            .resource_common_data
+            .get_optional_billing_email()
+            .or_else(|| router_data.request.email.clone())
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "billing_address.email",
+            })?;
+
+        let country = router_data
+            .resource_common_data
+            .get_optional_billing_country()
+            .unwrap_or(common_enums::CountryAlpha2::US);
+
+        let billing_address = NuveiBillingAddress {
+            email,
+            first_name: router_data
+                .resource_common_data
+                .get_optional_billing_first_name(),
+            last_name: router_data
+                .resource_common_data
+                .get_optional_billing_last_name(),
+            country: country.to_string(),
+            phone: router_data
+                .resource_common_data
+                .get_optional_billing_phone_number(),
+            city: router_data.resource_common_data.get_optional_billing_city(),
+            address: router_data
+                .resource_common_data
+                .get_optional_billing_line1(),
+            address_line2: router_data
+                .resource_common_data
+                .get_optional_billing_line2(),
+            address_line3: router_data
+                .resource_common_data
+                .get_optional_billing()
+                .and_then(|billing| billing.address.as_ref())
+                .and_then(|addr| addr.line3.clone()),
+            zip: router_data.resource_common_data.get_optional_billing_zip(),
+            state: router_data
+                .resource_common_data
+                .get_optional_billing_state(),
+        };
+
+        // Get device details from browser_info
+        let ip_address = router_data
+            .request
+            .browser_info
+            .as_ref()
+            .and_then(|bi| bi.ip_address)
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+
+        let device_details = NuveiDeviceDetails {
+            ip_address: Secret::new(ip_address),
+        };
+
+        let time_stamp = NuveiAuthType::get_timestamp();
+        let client_request_id = router_data
+            .resource_common_data
+            .connector_request_reference_id
+            .clone();
+
+        // Convert amount
+        let amount = item
+            .connector
+            .amount_converter_webhooks
+            .convert(
+                router_data.request.minor_amount,
+                router_data.request.currency,
+            )
+            .change_context(errors::ConnectorError::RequestEncodingFailed)?;
+
+        let currency = router_data.request.currency;
+
+        // Generate checksum for MIT (same as payment)
+        let checksum = auth.generate_checksum(&[
+            auth.merchant_id.peek(),
+            auth.merchant_site_id.peek(),
+            &client_request_id,
+            &amount.get_amount_as_string(),
+            &currency.to_string(),
+            &time_stamp.to_string(),
+        ]);
+
+        Ok(Self {
+            session_token: None, // Not needed for stored credential payments
+            merchant_id: auth.merchant_id,
+            merchant_site_id: auth.merchant_site_id,
+            client_request_id,
+            amount,
+            currency,
+            user_token_id: None,
+            client_unique_id: Some(
+                router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            ),
+            user_payment_option_id,
+            is_rebilling: "1".to_string(), // Subsequent MIT
+            rebilling_type: "MIT".to_string(),
+            related_transaction_id,
+            device_details,
+            billing_address,
+            time_stamp,
+            checksum,
+        })
+    }
+}
+
+// RepeatPayment Response Transformation
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<NuveiRepeatPaymentResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<NuveiRepeatPaymentResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let response = &item.response;
+        let router_data = &item.router_data;
+
+        // Check for errors
+        if matches!(response.status, NuveiPaymentStatus::Error) {
+            let error_code = response.err_code.map(|c| c.to_string()).unwrap_or_default();
+            let error_message = response
+                .reason
+                .clone()
+                .unwrap_or_else(|| "Unknown error".to_string());
+
+            return Ok(Self {
+                resource_common_data: PaymentFlowData {
+                    status: common_enums::AttemptStatus::Failure,
+                    ..router_data.resource_common_data.clone()
+                },
+                response: Err(domain_types::router_data::ErrorResponse {
+                    code: error_code,
+                    message: error_message.clone(),
+                    reason: Some(error_message),
+                    status_code: item.http_code,
+                    attempt_status: Some(common_enums::AttemptStatus::Failure),
+                    connector_transaction_id: response.transaction_id.clone(),
+                    network_decline_code: None,
+                    network_advice_code: None,
+                    network_error_message: None,
+                }),
+                ..router_data.clone()
+            });
+        }
+
+        // Map transaction status
+        let status = match response.transaction_status {
+            Some(NuveiTransactionStatus::Approved) => {
+                if router_data.request.is_auto_capture()? {
+                    common_enums::AttemptStatus::Charged
+                } else {
+                    common_enums::AttemptStatus::Authorized
+                }
+            }
+            Some(NuveiTransactionStatus::Declined) => common_enums::AttemptStatus::Failure,
+            Some(NuveiTransactionStatus::Error) => common_enums::AttemptStatus::Failure,
+            Some(NuveiTransactionStatus::Redirect) => {
+                common_enums::AttemptStatus::AuthenticationPending
+            }
+            Some(NuveiTransactionStatus::Pending) => common_enums::AttemptStatus::Pending,
+            _ => {
+                if matches!(response.status, NuveiPaymentStatus::Success) {
+                    common_enums::AttemptStatus::Pending
+                } else {
+                    common_enums::AttemptStatus::Failure
+                }
+            }
+        };
+
+        // Get connector transaction ID
+        let connector_transaction_id = response
+            .transaction_id
+            .clone()
+            .or(response.order_id.clone())
+            .ok_or(errors::ConnectorError::MissingConnectorTransactionID)?;
+
+        let payments_response_data = PaymentsResponseData::TransactionResponse {
+            resource_id: ResponseId::ConnectorTransactionId(connector_transaction_id),
+            redirection_data: None,
+            mandate_reference: None,
+            connector_metadata: None,
+            network_txn_id: None,
+            connector_response_reference_id: response.client_request_id.clone(),
             incremental_authorization_allowed: None,
             status_code: item.http_code,
         };
