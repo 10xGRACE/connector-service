@@ -1,0 +1,4 @@
+https://finix.com/docs/guides/payments/online-payments/getting-started/finix-api/ach-echeck/
+https://finix.com/docs/guides/getting-started/
+https://finix.com/docs/guides/payments/online-payments/
+https://finix.com/docs/api/

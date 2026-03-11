@@ -259,7 +259,7 @@ macros::create_all_prerequisites!(
                     "Content-Type".to_string(),
                     self.get_content_type().to_string().into(),
                 ),
-                ("WP-API-Version".to_string(), "2024-06-01".into()),
+                ("WP-API-Version".to_string(), "2024-07-01".into()),
             ];
             let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
             headers.append(&mut api_key);
@@ -388,7 +388,13 @@ macros::macro_connector_implementation!(
             &self,
             req: &RouterDataV2<Authorize, PaymentFlowData, PaymentsAuthorizeData<T>, PaymentsResponseData>,
         ) -> CustomResult<String, errors::ConnectorError> {
-            Ok(format!("{}api/payments", self.connector_base_url_payments(req)))
+            let base_url = self.connector_base_url_payments(req);
+            // Use apmPayments endpoint for Bank Debit (SEPA) payments
+            let endpoint = match &req.request.payment_method_data {
+                domain_types::payment_method_data::PaymentMethodData::BankDebit(_) => "apmPayments",
+                _ => "api/payments",
+            };
+            Ok(format!("{}{}", base_url, endpoint))
         }
     }
 );

@@ -1,0 +1,10 @@
+https://developer.paypal.com/limited-release/commerce-platform/accept-payments/apm/ach-direct-debit/
+https://developer.paypal.com/docs/api/payment-tokens/v3/
+https://developer.paypal.com/api/rest/authentication/
+https://developer.paypal.com/tools/sandbox/
+https://developer.paypal.com/docs/api/orders/v2/
+https://developer.paypal.com/docs/api/payments/v2/
+https://developer.paypal.com/api/rest/
+https://developer.paypal.com/api/rest/requests/
+https://developer.paypal.com/api/rest/responses/
+https://developer.paypal.com/limited-release/commerce-platform/

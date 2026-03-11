@@ -1,0 +1,2 @@
+https://mifinity.readme.io/docs/pab-api
+https://mifinity.readme.io/docs/authentication

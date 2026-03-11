@@ -1,0 +1,10 @@
+https://developer.hipay.com/online-payments/payment-means/sepa-direct-debit
+https://developer.hipay.com/online-payments/overview
+https://developer.hipay.com/online-payments/payment-integrations/api-only
+https://developer.hipay.com/online-payments/maintenance/capture
+https://developer.hipay.com/online-payments/maintenance/challenge
+https://developer.hipay.com/online-payments/requirements/security
+https://developer.hipay.com/online-payments/requirements/signature-verification
+https://developer.hipay.com/online-payments/essentials/transaction-lifecycle
+https://developer.hipay.com/online-payments/essentials/transaction-status
+https://developer.hipay.com/online-payments/essentials/error-messages

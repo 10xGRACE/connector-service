@@ -1,0 +1,15 @@
+https://developer.paypal.com/braintree/docs/guides/ach/overview
+https://developer.paypal.com/braintree/docs/guides/ach/configuration
+https://developer.paypal.com/braintree/docs/guides/ach/server-side
+https://developer.paypal.com/braintree/docs/guides/ach/testing-go-live
+https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/overview
+https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/configuration
+https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/server-side
+https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/testing-go-live
+https://developer.paypal.com/braintree/docs/start/overview
+https://developer.paypal.com/braintree/docs/guides/authorization/overview
+https://developer.paypal.com/braintree/docs/guides/payment-method-nonces
+https://developer.paypal.com/braintree/docs/guides/payment-methods
+https://developer.paypal.com/braintree/docs/reference/general/testing
+https://developer.paypal.com/braintree/docs/reference/general/statuses
+https://developer.paypal.com/braintree/docs/guides/transactions

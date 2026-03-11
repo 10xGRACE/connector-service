@@ -1,0 +1,10 @@
+https://docs.dlocal.com/docs/bank-transfer-payment
+https://docs.dlocal.com/docs/get-started
+https://docs.dlocal.com/docs/get-api-credentials
+https://docs.dlocal.com/docs/generate-signature
+https://docs.dlocal.com/docs/make-a-test-payment
+https://docs.dlocal.com/docs/initial-settings
+https://docs.dlocal.com/docs/overview-payins
+https://docs.dlocal.com/docs/payment-method
+https://docs.dlocal.com/docs/full-api
+https://docs.dlocal.com/reference

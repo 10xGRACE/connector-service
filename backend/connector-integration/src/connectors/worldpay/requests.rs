@@ -41,7 +41,10 @@ pub struct Instruction<
 > {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settlement: Option<AutoSettlement>,
-    pub method: PaymentMethod,
+    // Method is required for card payments but NOT for APM (SEPA) payments via apmPayments endpoint
+    // This is conditionally serialized in the transformer, so we skip it by default
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<PaymentMethod>,
     pub payment_instrument: PaymentInstrument<T>,
     pub narrative: InstructionNarrative,
     pub value: PaymentValue,
@@ -50,8 +53,10 @@ pub struct Instruction<
     #[serde(rename = "threeDS", skip_serializing_if = "Option::is_none")]
     pub three_ds: Option<ThreeDSRequest>,
     /// For setting up mandates
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_creation: Option<TokenCreation>,
     /// For specifying CIT vs MIT
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub customer_agreement: Option<CustomerAgreement>,
 }
 
@@ -79,10 +84,11 @@ pub struct CustomerAgreement {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum CustomerAgreementType {
     Subscription,
     Unscheduled,
+    OneTime,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -107,6 +113,7 @@ pub enum PaymentInstrument<
     RawCardForNTI(RawCardDetails<domain_types::payment_method_data::DefaultPCIHolder>),
     Googlepay(WalletPayment),
     Applepay(WalletPayment),
+    SepaBankDebit(SepaBankDebitPayment),
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -142,6 +149,29 @@ pub struct RawCardDetails<
     pub payment_type: PaymentType,
     pub card_number: domain_types::payment_method_data::RawCardNumber<T>,
     pub expiry_date: ExpiryDate,
+}
+
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SepaBankDebitPayment {
+    #[serde(rename = "type")]
+    pub payment_type: SepaPaymentType,
+    pub iban: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swift_bic: Option<Secret<String>>,
+    pub account_holder_name: Secret<String>,
+    pub language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_address: Option<BillingAddress>,
+}
+
+#[derive(
+    Clone, Copy, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum SepaPaymentType {
+    #[default]
+    Direct,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -214,6 +244,8 @@ pub struct Customer {
     pub risk_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication: Option<CustomerAuthentication>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<Secret<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -320,6 +352,7 @@ pub enum PaymentMethod {
     Card,
     ApplePay,
     GooglePay,
+    Sepa,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]

@@ -1,0 +1,12 @@
+https://docs.fiserv.dev/public/docs/sepa-direct-debit
+https://docs.fiserv.dev/public/docs/sepa-direct-debit-1
+https://docs.fiserv.dev/public/docs/sepa-direct-debit-germany
+https://docs.fiserv.dev/public/docs/sepa-direct-debit-with-fiserv-local-payments
+https://docs.fiserv.dev/public/docs/mandatory-fields
+https://docs.fiserv.dev/public/docs/getting-started
+https://docs.fiserv.dev/public/docs/response-codes
+https://docs.fiserv.dev/public/docs/payments-api-quickstart
+https://docs.fiserv.dev/public/docs/sandbox-usage
+https://docs.fiserv.dev/public/docs/errors
+https://docs.fiserv.dev/public/docs/message-signature
+https://docs.fiserv.dev/public/docs/security

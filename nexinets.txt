@@ -1,0 +1,10 @@
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/sepa-direct-debit/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/confirm-order/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/charge-payments/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/reason-codes/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/test-environment/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/test-data/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/go-live-checklist/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/access-your-integration-keys/
+https://developer.nexigroup.com/nexi-checkout/en-EU/docs/payment-methods/
+https://developer.nexigroup.com/nexi-checkout/en-EU/api/

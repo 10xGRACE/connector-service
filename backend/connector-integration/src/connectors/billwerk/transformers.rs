@@ -16,7 +16,9 @@ use domain_types::{
         RefundSyncData, RefundsData, RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+    },
     router_data::{
         ConnectorSpecificAuth, ErrorResponse, PaymentMethodToken as PaymentMethodTokenFlow,
     },
@@ -54,7 +56,7 @@ pub enum BillwerkStrongAuthRule {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BillwerkTokenRequest<
+pub struct BillwerkCardTokenRequest<
     T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
 > {
     number: RawCardNumber<T>,
@@ -65,6 +67,22 @@ pub struct BillwerkTokenRequest<
     recurring: Option<bool>,
     intent: Option<BillwerkTokenRequestIntent>,
     strong_authentication_rule: Option<BillwerkStrongAuthRule>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BillwerkSepaTokenRequest {
+    iban: Secret<String>,
+    pkey: Secret<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum BillwerkTokenRequest<
+    T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
+> {
+    Card(BillwerkCardTokenRequest<T>),
+    Sepa(BillwerkSepaTokenRequest),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -171,26 +189,36 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             T,
         >,
     ) -> Result<Self, Self::Error> {
+        let connector_auth = &item.router_data.connector_auth_type;
+        let auth_type = BillwerkAuthType::try_from(connector_auth)?;
+
         match item.router_data.request.payment_method_data.clone() {
-            PaymentMethodData::Card(ccard) => {
-                let connector_auth = &item.router_data.connector_auth_type;
-                let auth_type = BillwerkAuthType::try_from(connector_auth)?;
-                Ok(Self {
-                    number: ccard.card_number.clone(),
-                    month: ccard.card_exp_month.clone(),
-                    year: ccard.get_card_expiry_year_2_digit()?,
-                    cvv: ccard.card_cvc,
+            PaymentMethodData::Card(ccard) => Ok(Self::Card(BillwerkCardTokenRequest {
+                number: ccard.card_number.clone(),
+                month: ccard.card_exp_month.clone(),
+                year: ccard.get_card_expiry_year_2_digit()?,
+                cvv: ccard.card_cvc,
+                pkey: auth_type.public_api_key,
+                recurring: None,
+                intent: None,
+                strong_authentication_rule: None,
+            })),
+            PaymentMethodData::BankDebit(BankDebitData::SepaBankDebit { iban, .. }) => {
+                Ok(Self::Sepa(BillwerkSepaTokenRequest {
+                    iban,
                     pkey: auth_type.public_api_key,
-                    recurring: None,
-                    intent: None,
-                    strong_authentication_rule: None,
-                })
+                }))
             }
             PaymentMethodData::Wallet(_)
             | PaymentMethodData::CardRedirect(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
-            | PaymentMethodData::BankDebit(_)
+            | PaymentMethodData::BankDebit(
+                BankDebitData::AchBankDebit { .. }
+                | BankDebitData::SepaGuaranteedBankDebit { .. }
+                | BankDebitData::BecsBankDebit { .. }
+                | BankDebitData::BacsBankDebit { .. },
+            )
             | PaymentMethodData::BankTransfer(_)
             | PaymentMethodData::Crypto(_)
             | PaymentMethodData::MandatePayment

@@ -1,0 +1,404 @@
+{
+  "_metadata": {
+    "feature": "f7 - Bank Debit",
+    "description": "Filtered and verified API documentation links for backend Bank Debit integration. All URLs verified accessible (no 404/403). Categories: authentication, request/response API, error codes, bank debit specifics, token generation, testing/sandbox, getting started guides. Excludes: SDKs, webhooks, hosted UI, refunds, recurring, reporting, fraud, other payment methods.",
+    "generated_date": "2026-03-10",
+    "total_connectors": 34,
+    "total_links": 258
+  },
+  "cybersource": {
+    "links": [
+      "https://developer.cybersource.com/docs/cybs/en-us/echeck/user/all/rest/echeck-user-guide/echeck-gs.html",
+      "https://developer.cybersource.com/api/reference/api-reference.html",
+      "https://developer.cybersource.com/hello-world.html"
+    ]
+  },
+  "Authorizedotnet": {
+    "links": [
+      "https://developer.authorize.net/api/reference/features/echeck.html",
+      "https://developer.authorize.net/api/reference/index.html",
+      "https://developer.authorize.net/api/reference/features/payment_transactions.html",
+      "https://developer.authorize.net/api/reference/responseCodes.html"
+    ]
+  },
+  "braintree": {
+    "links": [
+      "https://developer.paypal.com/braintree/docs/guides/ach/overview",
+      "https://developer.paypal.com/braintree/docs/guides/ach/configuration",
+      "https://developer.paypal.com/braintree/docs/guides/ach/server-side",
+      "https://developer.paypal.com/braintree/docs/guides/ach/testing-go-live",
+      "https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/overview",
+      "https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/configuration",
+      "https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/server-side",
+      "https://developer.paypal.com/braintree/docs/guides/sepa-direct-debit/testing-go-live",
+      "https://developer.paypal.com/braintree/docs/start/overview",
+      "https://developer.paypal.com/braintree/docs/guides/authorization/overview",
+      "https://developer.paypal.com/braintree/docs/guides/payment-method-nonces",
+      "https://developer.paypal.com/braintree/docs/guides/payment-methods",
+      "https://developer.paypal.com/braintree/docs/reference/general/testing",
+      "https://developer.paypal.com/braintree/docs/reference/general/statuses",
+      "https://developer.paypal.com/braintree/docs/guides/transactions"
+    ]
+  },
+  "mifinity": {
+    "links": [
+      "https://mifinity.readme.io/docs/pab-api",
+      "https://mifinity.readme.io/docs/authentication"
+    ]
+  },
+  "Paypal": {
+    "links": [
+      "https://developer.paypal.com/limited-release/commerce-platform/accept-payments/apm/ach-direct-debit/",
+      "https://developer.paypal.com/docs/api/payment-tokens/v3/",
+      "https://developer.paypal.com/api/rest/authentication/",
+      "https://developer.paypal.com/tools/sandbox/",
+      "https://developer.paypal.com/docs/api/orders/v2/",
+      "https://developer.paypal.com/docs/api/payments/v2/",
+      "https://developer.paypal.com/api/rest/",
+      "https://developer.paypal.com/api/rest/requests/",
+      "https://developer.paypal.com/api/rest/responses/",
+      "https://developer.paypal.com/limited-release/commerce-platform/"
+    ]
+  },
+  "worldpay": {
+    "links": [
+      "https://developer.worldpay.com/products/apms/sepa",
+      "https://developer.worldpay.com/products/access/go-live",
+      "https://developer.worldpay.com/products/access/testing",
+      "https://developer.worldpay.com/products/access/tokens"
+    ]
+  },
+  "Checkout": {
+    "links": [
+      "https://www.checkout.com/docs/payments/add-payment-methods/sepa-direct-debit-core",
+      "https://www.checkout.com/docs/payments/add-payment-methods/sepa-direct-debit/api-only",
+      "https://www.checkout.com/docs/get-started",
+      "https://www.checkout.com/docs/payments",
+      "https://www.checkout.com/docs/payments/accept-payments",
+      "https://www.checkout.com/docs/testing",
+      "https://www.checkout.com/docs/payments/add-payment-methods"
+    ]
+  },
+  "datatrans": {
+    "links": [
+      "https://docs.datatrans.ch/docs/payment-methods",
+      "https://docs.datatrans.ch/docs/payment-methods#sepa-elv",
+      "https://docs.datatrans.ch/docs/getting-started",
+      "https://docs.datatrans.ch/docs/tokenization"
+    ]
+  },
+  "Dlocal": {
+    "links": [
+      "https://docs.dlocal.com/docs/bank-transfer-payment",
+      "https://docs.dlocal.com/docs/get-started",
+      "https://docs.dlocal.com/docs/get-api-credentials",
+      "https://docs.dlocal.com/docs/generate-signature",
+      "https://docs.dlocal.com/docs/make-a-test-payment",
+      "https://docs.dlocal.com/docs/initial-settings",
+      "https://docs.dlocal.com/docs/overview-payins",
+      "https://docs.dlocal.com/docs/payment-method",
+      "https://docs.dlocal.com/docs/full-api",
+      "https://docs.dlocal.com/reference"
+    ]
+  },
+  "Fiserv": {
+    "links": [
+      "https://docs.fiserv.dev/public/docs/getting-started",
+      "https://docs.fiserv.dev/public/docs/response-codes",
+      "https://docs.fiserv.dev/public/docs/payments-api-quickstart",
+      "https://docs.fiserv.dev/public/docs/pre-authorisation",
+      "https://docs.fiserv.dev/public/docs/payment-methods",
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit-1",
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit-germany",
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit-with-fiserv-local-payments",
+      "https://docs.fiserv.dev/public/docs/mandatory-fields",
+      "https://docs.fiserv.dev/public/docs/sandbox-usage",
+      "https://docs.fiserv.dev/public/docs/errors",
+      "https://docs.fiserv.dev/public/docs/message-signature",
+      "https://docs.fiserv.dev/public/docs/security",
+      "https://docs.fiserv.dev/public/docs/payment-lifecycle"
+    ]
+  },
+  "fiservemea": {
+    "links": [
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit",
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit-1",
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit-germany",
+      "https://docs.fiserv.dev/public/docs/sepa-direct-debit-with-fiserv-local-payments",
+      "https://docs.fiserv.dev/public/docs/mandatory-fields",
+      "https://docs.fiserv.dev/public/docs/getting-started",
+      "https://docs.fiserv.dev/public/docs/response-codes",
+      "https://docs.fiserv.dev/public/docs/payments-api-quickstart",
+      "https://docs.fiserv.dev/public/docs/sandbox-usage",
+      "https://docs.fiserv.dev/public/docs/errors",
+      "https://docs.fiserv.dev/public/docs/message-signature",
+      "https://docs.fiserv.dev/public/docs/security"
+    ]
+  },
+  "hipay": {
+    "links": [
+      "https://developer.hipay.com/online-payments/payment-means/sepa-direct-debit",
+      "https://developer.hipay.com/online-payments/overview",
+      "https://developer.hipay.com/online-payments/payment-integrations/api-only",
+      "https://developer.hipay.com/online-payments/maintenance/capture",
+      "https://developer.hipay.com/online-payments/maintenance/challenge",
+      "https://developer.hipay.com/online-payments/requirements/security",
+      "https://developer.hipay.com/online-payments/requirements/signature-verification",
+      "https://developer.hipay.com/online-payments/essentials/transaction-lifecycle",
+      "https://developer.hipay.com/online-payments/essentials/transaction-status",
+      "https://developer.hipay.com/online-payments/essentials/error-messages"
+    ]
+  },
+  "Nexinets": {
+    "links": [
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/sepa-direct-debit/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/confirm-order/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/charge-payments/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/reason-codes/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/test-environment/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/test-data/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/go-live-checklist/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/access-your-integration-keys/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/docs/payment-methods/",
+      "https://developer.nexigroup.com/nexi-checkout/en-EU/api/"
+    ]
+  },
+  "Finix": {
+    "links": [
+      "https://finix.com/docs/guides/payments/online-payments/getting-started/finix-api/ach-echeck/",
+      "https://finix.com/docs/guides/getting-started/",
+      "https://finix.com/docs/guides/payments/online-payments/",
+      "https://finix.com/docs/api/"
+    ]
+  },
+  "payload": {
+    "links": [
+      "https://docs.payload.com/apis/payments/",
+      "https://docs.payload.com/apis/authentication/",
+      "https://docs.payload.com/apis/payments/declines/",
+      "https://docs.payload.com/apis/payments/test-cards/",
+      "https://docs.payload.com/apis/payments/test-bank-accounts/",
+      "https://docs.payload.com/apis/transaction-types/",
+      "https://docs.payload.com/apis/payments/charging-a-customer/"
+    ]
+  },
+  "PlacetoPay": {
+    "links": [
+      "https://docs.placetopay.dev/en/gateway/",
+      "https://docs.placetopay.dev/en/checkout/create-session/",
+      "https://docs.placetopay.dev/en/gateway/authentication/",
+      "https://docs.placetopay.dev/en/gateway/api/reference/transaction/#process-request"
+    ]
+  },
+  "bluesnap": {
+    "links": [
+      "https://developers.bluesnap.com/reference/sepa-direct-debit",
+      "https://developers.bluesnap.com/docs/authentication",
+      "https://developers.bluesnap.com/v8976-JSON/reference/create-sepa-dd-transaction"
+    ]
+  },
+  "worldpayVantiv": {
+    "links": [
+      "https://developer.worldpay.com/products/apms/ach",
+      "https://developer.worldpay.com/products/access/go-live",
+      "https://developer.worldpay.com/products/access/testing"
+    ]
+  },
+  "Xendit": {
+    "links": [
+      "https://archive.docs.xendit.co/direct-debit",
+      "https://archive.docs.xendit.co/direct-debit/activation",
+      "https://archive.docs.xendit.co/direct-debit/payment-flow",
+      "https://archive.docs.xendit.co/direct-debit/integration-guide",
+      "https://archive.docs.xendit.co/direct-debit/integration-guide/account-linking",
+      "https://archive.docs.xendit.co/direct-debit/integration-guide/account-unlinking",
+      "https://archive.docs.xendit.co/direct-debit/integration-guide/payment-scenarios",
+      "https://archive.docs.xendit.co/direct-debit/integration-guide/handling-invalid-expired-tokens",
+      "https://archive.docs.xendit.co/direct-debit/rules-limitations",
+      "https://docs.xendit.co/apidocs/rate-limits",
+      "https://docs.xendit.co/docs/overview",
+      "https://archive.developers.xendit.co/"
+    ]
+  },
+  "Multisafepay": {
+    "links": [
+      "https://docs.multisafepay.com/docs/direct-debit",
+      "https://docs.multisafepay.com/docs/getting-started-guide",
+      "https://docs.multisafepay.com/docs/onboarding",
+      "https://docs.multisafepay.com/docs/api-integration",
+      "https://docs.multisafepay.com/docs/testing",
+      "https://docs.multisafepay.com/docs/payment-statuses",
+      "https://docs.multisafepay.com/docs/http-errors",
+      "https://docs.multisafepay.com/docs/troubleshooting",
+      "https://docs.multisafepay.com/reference/"
+    ]
+  },
+  "globalpay": {
+    "links": [
+      "https://developer.globalpayments.com/heartland/payments/online/check-payments"
+    ]
+  },
+  "paysafe": {
+    "links": [
+      "https://developer.paysafe.com/en/api-docs/direct-debit/direct-debit-payments",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/before-you-start",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/scenarios",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/making-api-calls",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/process-a-purchase",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/purchase-message-sequence",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/create-a-payment-token",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/api-reference",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/testing-instructions",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/direct-debit-errors",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/troubleshooting-api-requests",
+      "https://developer.paysafe.com/en/api-docs/direct-debit/going-live"
+    ]
+  },
+  "Rapyd": {
+    "links": [
+      "https://docs.rapyd.net/en/bank-direct-debit.html",
+      "https://docs.rapyd.net/en/get-payment-method-required-fields.html",
+      "https://docs.rapyd.net/en/create-payment.html",
+      "https://docs.rapyd.net/en/getting-started.html",
+      "https://docs.rapyd.net/en/authentication.html",
+      "https://docs.rapyd.net/en/error-messages.html",
+      "https://docs.rapyd.net/en/sandbox.html",
+      "https://docs.rapyd.net/en/testing.html",
+      "https://docs.rapyd.net/en/list-payment-methods-by-country.html",
+      "https://docs.rapyd.net/en/complete-payment.html"
+    ]
+  },
+  "stax": {
+    "links": [
+      "https://docs.staxpayments.com/docs/ach-processing",
+      "https://docs.staxpayments.com/docs/enabling-ach-bank-payments",
+      "https://docs.staxpayments.com/docs/processing-an-ach-payment",
+      "https://docs.staxpayments.com/docs/checking-ach-auto-reconciliation-status",
+      "https://docs.staxpayments.com/docs/online-payments-overview",
+      "https://docs.staxpayments.com/docs/test-environments",
+      "https://docs.staxpayments.com/docs/accessing-and-creating-api-keys",
+      "https://docs.staxpayments.com/docs/test-card-payment-methods",
+      "https://docs.staxpayments.com/docs/bank-ach-transactions",
+      "https://docs.staxpayments.com/docs/accept-a-bank-transfer",
+      "https://docs.staxpayments.com/reference/"
+    ]
+  },
+  "nmi": {
+    "links": [
+      "https://docs.nmi.com/docs/online-payments-overview",
+      "https://docs.nmi.com/docs/credential-on-file",
+      "https://docs.nmi.com/reference/"
+    ]
+  },
+  "shift4": {
+    "links": [
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/ach",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/ach/verify",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/ach/sale",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/ach/plaid/link_token/create",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/ach/plaid/public_token/exchange",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/credentials/accesstoken",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/tokens",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/transactions",
+      "https://docs.shift4.com/apis/payments-platform-rest/openapi/batches"
+    ]
+  },
+  "billwerk": {
+    "links": [
+      "https://docs.frisbii.com/docs/sepa-direct-debit",
+      "https://docs.frisbii.com/docs/getting-started",
+      "https://docs.frisbii.com/docs/payments",
+      "https://docs.frisbii.com/docs/payment-method-details",
+      "https://docs.frisbii.com/reference/",
+      "https://docs.frisbii.com/docs/api-examples"
+    ]
+  },
+  "nuvei": {
+    "links": [
+      "https://docs.nuvei.com/documentation/additional-links/rest-2-0/apms/ach",
+      "https://docs.nuvei.com/documentation/additional-links/rest-2-0/features/authentication/",
+      "https://docs.nuvei.com/documentation/additional-links/rest-2-0/payment-tokens/",
+      "https://docs.nuvei.com/documentation/additional-links/rest-2-0/apms/apm-input-parameters/",
+      "https://docs.nuvei.com/documentation/additional-links/rest-2-0/api-reference-2/",
+      "https://docs.nuvei.com/documentation/integration/testing-cards/",
+      "https://docs.nuvei.com/documentation/integration/testing-apms/",
+      "https://docs.nuvei.com/documentation/integration/testing-apis-with-postman/",
+      "https://docs.nuvei.com/documentation/integration/response-handling/"
+    ]
+  },
+  "bambora": {
+    "links": [
+      "https://docs.na.worldline-solutions.com/build-your-integration/payment-apis/batch-payment/",
+      "https://docs.na.worldline-solutions.com/build-your-integration/payment-apis/payment-api/"
+    ]
+  },
+  "mollie": {
+    "links": [
+      "https://docs.mollie.com/docs/sepa-direct-debit",
+      "https://docs.mollie.com/docs/getting-started",
+      "https://docs.mollie.com/docs/payment-methods",
+      "https://docs.mollie.com/docs/handling-payment-status",
+      "https://docs.mollie.com/docs/troubleshoot-common-issues",
+      "https://docs.mollie.com/reference/",
+      "https://docs.mollie.com/docs/accepting-payments"
+    ]
+  },
+  "Airwallex": {
+    "links": [
+      "https://www.airwallex.com/docs/payments__north-america-and-latam__ach-direct-debit",
+      "https://www.airwallex.com/docs/payments__overview",
+      "https://www.airwallex.com/docs/payments__get-started-with-payments",
+      "https://www.airwallex.com/docs/payments__payment-method-activation",
+      "https://www.airwallex.com/docs/payments__quickstart",
+      "https://www.airwallex.com/docs/payments__online-payments__overview",
+      "https://www.airwallex.com/docs/payments__online-payments__native-api",
+      "https://www.airwallex.com/docs/payments__payment-methods",
+      "https://www.airwallex.com/docs/payments__test-and-go-live__integration-checklist",
+      "https://www.airwallex.com/docs/payments__test-and-go-live__test-card-numbers",
+      "https://www.airwallex.com/docs/payments__troubleshooting__response-codes",
+      "https://www.airwallex.com/docs/payments__troubleshooting__error-response-codes",
+      "https://www.airwallex.com/docs/api"
+    ]
+  },
+  "jpmorgan": {
+    "links": [
+      "https://developer.payments.jpmorgan.com/docs/commerce/online-payments/capabilities/online-payments/payment-methods/ach",
+      "https://developer.payments.jpmorgan.com/docs/commerce/online-payments/capabilities/online-payments/payment-methods/sepa",
+      "https://developer.payments.jpmorgan.com/docs/commerce/online-payments/capabilities/online-payments/payment-methods/index",
+      "https://developer.payments.jpmorgan.com/docs/commerce/online-payments/capabilities/online-payments/how-to/auth-and-capture-payment",
+      "https://developer.payments.jpmorgan.com/docs/commerce/online-payments/capabilities/online-payments/how-to/verify-payment",
+      "https://developer.payments.jpmorgan.com/docs/commerce/online-payments/capabilities/online-payments/how-to/update-a-payment",
+      "https://developer.payments.jpmorgan.com/api/commerce/online-payments/online-payments/error-codes"
+    ]
+  },
+  "Volt - new APIs": {
+    "links": [
+      "https://docs.volt.io/implementation/payments",
+      "https://docs.volt.io/implementation",
+      "https://docs.volt.io/implementation/essentials/authentication",
+      "https://docs.volt.io/implementation/essentials/environments",
+      "https://docs.volt.io/implementation/essentials/error-handling",
+      "https://docs.volt.io/implementation/payments/integration-overview/api-only",
+      "https://docs.volt.io/implementation/payments/integration-details/requesting-payment",
+      "https://docs.volt.io/api-reference",
+      "https://docs.volt.io/get-started"
+    ]
+  },
+  "Razorpay": {
+    "links": [
+      "https://razorpay.com/docs/payments/recurring-payments/emandate/integrate/",
+      "https://razorpay.com/docs/payments/recurring-payments/emandate/charge-customer-during-registration/",
+      "https://razorpay.com/docs/payments/recurring-payments/emandate/supported-banks/",
+      "https://razorpay.com/docs/payments/recurring-payments/emandate/apis/",
+      "https://razorpay.com/docs/payments/recurring-payments/emandate/errors/",
+      "https://razorpay.com/docs/payments/recurring-payments/paper-nach/integrate/",
+      "https://razorpay.com/docs/api/payments/recurring-payments/emandate/create-authorization-transaction/",
+      "https://razorpay.com/docs/api/payments/recurring-payments/emandate/tokens/",
+      "https://razorpay.com/docs/api/payments/recurring-payments/emandate/create-subsequent-payments/",
+      "https://razorpay.com/docs/api/payments/recurring-payments/paper-nach/create-authorization-transaction/",
+      "https://razorpay.com/docs/api/payments/recurring-payments/paper-nach/tokens/",
+      "https://razorpay.com/docs/api/payments/recurring-payments/paper-nach/create-subsequent-payments/",
+      "https://razorpay.com/docs/api/"
+    ]
+  }
+}

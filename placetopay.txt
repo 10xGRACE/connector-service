@@ -1,0 +1,4 @@
+https://docs.placetopay.dev/en/gateway/
+https://docs.placetopay.dev/en/checkout/create-session/
+https://docs.placetopay.dev/en/gateway/authentication/
+https://docs.placetopay.dev/en/gateway/api/reference/transaction/#process-request

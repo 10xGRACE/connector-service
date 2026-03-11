@@ -1,0 +1,9 @@
+https://docs.multisafepay.com/docs/direct-debit
+https://docs.multisafepay.com/docs/getting-started-guide
+https://docs.multisafepay.com/docs/onboarding
+https://docs.multisafepay.com/docs/api-integration
+https://docs.multisafepay.com/docs/testing
+https://docs.multisafepay.com/docs/payment-statuses
+https://docs.multisafepay.com/docs/http-errors
+https://docs.multisafepay.com/docs/troubleshooting
+https://docs.multisafepay.com/reference/

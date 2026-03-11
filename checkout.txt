@@ -1,0 +1,7 @@
+https://www.checkout.com/docs/payments/add-payment-methods/sepa-direct-debit-core
+https://www.checkout.com/docs/payments/add-payment-methods/sepa-direct-debit/api-only
+https://www.checkout.com/docs/get-started
+https://www.checkout.com/docs/payments
+https://www.checkout.com/docs/payments/accept-payments
+https://www.checkout.com/docs/testing
+https://www.checkout.com/docs/payments/add-payment-methods

@@ -14,7 +14,7 @@ use domain_types::{
     },
     errors,
     payment_method_data::{
-        BankRedirectData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+        BankDebitData, BankRedirectData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
     },
     router_data::{ConnectorSpecificAuth, ErrorResponse},
     router_data_v2::RouterDataV2,
@@ -318,6 +318,30 @@ pub struct GlobalpayApm {
     pub provider: Option<ApmProvider>,
 }
 
+// ===== ACH / BANK DEBIT STRUCTURES =====
+
+/// ACH account type for bank debit payments
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AchAccountType {
+    Checking,
+    Savings,
+}
+
+/// ACH payment method data for bank debit flows
+#[derive(Debug, Serialize)]
+pub struct GlobalpayAch {
+    /// The account number for the ACH transaction
+    pub account_number: Secret<String>,
+    /// The routing number for the ACH transaction
+    pub routing_number: Secret<String>,
+    /// The type of account (checking or savings)
+    pub account_type: AchAccountType,
+    /// The name of the account holder
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_holder_name: Option<Secret<String>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct GlobalpayPaymentsRequest<T: PaymentMethodDataTypes> {
     pub account_name: String,
@@ -346,6 +370,8 @@ pub struct GlobalpayPaymentMethod<T: PaymentMethodDataTypes> {
     pub card: Option<GlobalpayCard<T>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apm: Option<GlobalpayApm>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ach: Option<GlobalpayAch>,
 }
 
 #[derive(Debug, Serialize)]
@@ -410,6 +436,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                         cvv_indicator,
                     }),
                     apm: None,
+                    ach: None,
                 }
             }
             PaymentMethodData::BankRedirect(bank_redirect) => {
@@ -431,6 +458,38 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     card: None,
                     apm: Some(GlobalpayApm {
                         provider: apm_provider,
+                    }),
+                    ach: None,
+                }
+            }
+            PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_type,
+                bank_account_holder_name,
+                ..
+            }) => {
+                // Map bank_type to ACH account type
+                let account_type = match bank_type {
+                    Some(common_enums::BankType::Savings) => AchAccountType::Savings,
+                    _ => AchAccountType::Checking,
+                };
+
+                // Get account holder name from bank_account_holder_name or customer_name
+                let account_holder_name = bank_account_holder_name
+                    .clone()
+                    .or_else(|| item.request.customer_name.clone().map(Secret::new));
+
+                GlobalpayPaymentMethod {
+                    name: account_holder_name.clone(),
+                    entry_mode: constants::ENTRY_MODE_ECOM.to_string(),
+                    card: None,
+                    apm: None,
+                    ach: Some(GlobalpayAch {
+                        account_number: account_number.clone(),
+                        routing_number: routing_number.clone(),
+                        account_type,
+                        account_holder_name,
                     }),
                 }
             }

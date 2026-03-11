@@ -492,6 +492,12 @@ pub enum ConnectorSpecificAuth {
     Revolv3 {
         api_key: Secret<String>,
     },
+    Finix {
+        api_key: Secret<String>,
+        api_secret: Secret<String>,
+        merchant_id: Secret<String>,
+        identity_id: Secret<String>,
+    },
 }
 
 impl ForeignTryFrom<grpc_api_types::payments::ConnectorAuth> for ConnectorSpecificAuth {

@@ -1,0 +1,3 @@
+https://developers.bluesnap.com/reference/sepa-direct-debit
+https://developers.bluesnap.com/docs/authentication
+https://developers.bluesnap.com/v8976-JSON/reference/create-sepa-dd-transaction

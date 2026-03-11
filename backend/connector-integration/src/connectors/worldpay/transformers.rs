@@ -199,7 +199,6 @@ fn fetch_payment_instrument<
         },
         PaymentMethodData::PayLater(_)
         | PaymentMethodData::BankRedirect(_)
-        | PaymentMethodData::BankDebit(_)
         | PaymentMethodData::BankTransfer(_)
         | PaymentMethodData::Crypto(_)
         | PaymentMethodData::Reward
@@ -215,6 +214,53 @@ fn fetch_payment_instrument<
             utils::get_unimplemented_payment_method_error_message("worldpay"),
         )
         .into()),
+        PaymentMethodData::BankDebit(bank_debit_data) => {
+            match bank_debit_data {
+                domain_types::payment_method_data::BankDebitData::SepaBankDebit {
+                    iban,
+                    bank_account_holder_name,
+                } => {
+                    let account_holder_name = bank_account_holder_name
+                        .clone()
+                        .or_else(|| billing_address.and_then(|addr| addr.get_optional_full_name()))
+                        .ok_or_else(|| ConnectorError::MissingRequiredField {
+                            field_name: "bank_account_holder_name",
+                        })?;
+
+                    let billing_addr = billing_address
+                        .and_then(|addr| addr.address.clone())
+                        .and_then(|address| {
+                            match (address.line1, address.city, address.zip, address.country) {
+                                (Some(address1), Some(city), Some(postal_code), Some(country_code)) => {
+                                    Some(BillingAddress {
+                                        address1,
+                                        address2: address.line2,
+                                        address3: address.line3,
+                                        city,
+                                        state: address.state,
+                                        postal_code,
+                                        country_code,
+                                    })
+                                }
+                                _ => None,
+                            }
+                        });
+
+                    Ok(PaymentInstrument::SepaBankDebit(SepaBankDebitPayment {
+                        payment_type: SepaPaymentType::Direct,
+                        iban: iban.clone(),
+                        swift_bic: None,
+                        account_holder_name,
+                        language: "en".to_string(),
+                        billing_address: billing_addr,
+                    }))
+                }
+                _ => Err(ConnectorError::NotImplemented(
+                    "Only SEPA Direct Debit is supported for Worldpay".to_string(),
+                )
+                .into()),
+            }
+        }
     }
 }
 
@@ -225,6 +271,7 @@ impl TryFrom<(enums::PaymentMethod, Option<enums::PaymentMethodType>)> for Payme
     ) -> Result<Self, Self::Error> {
         match (src.0, src.1) {
             (enums::PaymentMethod::Card, _) => Ok(Self::Card),
+            (enums::PaymentMethod::BankDebit, _) => Ok(Self::Sepa),
             (enums::PaymentMethod::Wallet, pmt) => {
                 let pm = pmt.ok_or(ConnectorError::MissingRequiredField {
                     field_name: "payment_method_type",
@@ -332,6 +379,14 @@ fn get_settlement_info<
     >,
     amount: MinorUnit,
 ) -> Option<AutoSettlement> {
+    // Settlement field is not supported for Bank Debit (SEPA) payments via apmPayments endpoint
+    if matches!(
+        &router_data.request.payment_method_data,
+        PaymentMethodData::BankDebit(_)
+    ) {
+        return None;
+    }
+
     match router_data.request.capture_method.unwrap_or_default() {
         _ if amount == MinorUnit::zero() => None,
         enums::CaptureMethod::Automatic | enums::CaptureMethod::SequentialAutomatic => {
@@ -440,10 +495,19 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     &item.router_data,
                     item.router_data.request.minor_amount,
                 ),
-                method: PaymentMethod::try_from((
-                    item.router_data.resource_common_data.payment_method,
-                    item.router_data.request.payment_method_type,
-                ))?,
+                // For Bank Debit (SEPA) payments, method is "sepa"
+                // For card payments, method is derived from payment_method
+                method: if matches!(
+                    &item.router_data.request.payment_method_data,
+                    PaymentMethodData::BankDebit(_)
+                ) {
+                    Some(PaymentMethod::Sepa)
+                } else {
+                    Some(PaymentMethod::try_from((
+                        item.router_data.resource_common_data.payment_method,
+                        item.router_data.request.payment_method_type,
+                    ))?)
+                },
                 payment_instrument: fetch_payment_instrument(
                     item.router_data.request.payment_method_data.clone(),
                     item.router_data.resource_common_data.get_optional_billing(),
@@ -458,7 +522,18 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 debt_repayment: None,
                 three_ds,
                 token_creation,
-                customer_agreement,
+                customer_agreement: if matches!(
+                    &item.router_data.request.payment_method_data,
+                    PaymentMethodData::BankDebit(_)
+                ) {
+                    Some(CustomerAgreement {
+                        agreement_type: CustomerAgreementType::OneTime, // For SEPA one-time payments
+                        stored_card_usage: None,
+                        scheme_reference: None,
+                    })
+                } else {
+                    customer_agreement
+                },
             },
             merchant: Merchant {
                 entity: WorldpayAuthType::try_from(&item.router_data.connector_auth_type)?
@@ -470,7 +545,21 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 .resource_common_data
                 .connector_request_reference_id
                 .clone(),
-            customer: None,
+            customer: if matches!(
+                &item.router_data.request.payment_method_data,
+                PaymentMethodData::BankDebit(_)
+            ) {
+                item.router_data
+                    .request
+                    .email
+                    .clone()
+                    .map(|email| Customer {
+                        email: Some(Secret::new(email.peek().to_string())),
+                        ..Default::default()
+                    })
+            } else {
+                None
+            },
         })
     }
 }
@@ -557,7 +646,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         Ok(Self {
             instruction: Instruction {
                 settlement,
-                method: PaymentMethod::Card, // RepeatPayment is always card-based
+                method: Some(PaymentMethod::Card), // RepeatPayment is always card-based
                 payment_instrument,
                 narrative: InstructionNarrative {
                     line1: merchant_name.expose(),

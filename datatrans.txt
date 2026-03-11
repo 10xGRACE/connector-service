@@ -1,0 +1,4 @@
+https://docs.datatrans.ch/docs/payment-methods
+https://docs.datatrans.ch/docs/payment-methods#sepa-elv
+https://docs.datatrans.ch/docs/getting-started
+https://docs.datatrans.ch/docs/tokenization
