@@ -12,7 +12,9 @@ use domain_types::{
         ResponseId,
     },
     errors,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+    },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
@@ -97,6 +99,8 @@ pub struct MolliePaymentsRequest {
 pub enum MolliePaymentMethodData {
     #[serde(rename = "creditcard")]
     CreditCard(Box<CreditCardMethodData>),
+    #[serde(rename = "directdebit")]
+    DirectDebit(Box<DirectDebitMethodData>),
 }
 
 // Credit Card Method Data
@@ -106,6 +110,16 @@ pub struct CreditCardMethodData {
     pub card_token: Option<Secret<String>>,
     pub billing_address: Option<MollieAddress>,
     pub shipping_address: Option<MollieAddress>,
+}
+
+// Direct Debit (SEPA) Method Data
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectDebitMethodData {
+    pub consumer_name: Secret<String>,
+    pub consumer_account: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_bic: Option<Secret<String>>,
 }
 
 // Mollie Address structure
@@ -191,7 +205,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                         let address = billing.address.as_ref()?;
                         let line1 = address.line1.as_ref()?.peek().to_string();
                         let street_and_number = match address.line2.as_ref() {
-                            Some(line2) => format!("{},{}", line1, line2.peek().as_str()),
+                            Some(line2) => format!("{}, {}", line1, line2.peek()),
                             None => line1,
                         };
 
@@ -199,7 +213,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                             street_and_number: Secret::new(street_and_number),
                             postal_code: Secret::new(address.zip.as_ref()?.peek().to_string()),
                             city: address.city.as_ref()?.peek().to_string(),
-                            region: None, // Match Hyperswitch: always null
+                            region: None,
                             country: address.country?,
                         })
                     });
@@ -209,6 +223,35 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     billing_address,
                     shipping_address: None,
                 }))
+            }
+            PaymentMethodData::BankDebit(BankDebitData::SepaBankDebit {
+                iban,
+                bank_account_holder_name,
+            })
+            | PaymentMethodData::BankDebit(BankDebitData::SepaGuaranteedBankDebit {
+                iban,
+                bank_account_holder_name,
+            }) => {
+                // Mollie uses directdebit method for SEPA payments
+                let consumer_name = bank_account_holder_name
+                    .as_ref()
+                    .map(|name| Secret::new(name.peek().to_string()))
+                    .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                        field_name: "bank_account_holder_name",
+                    })?;
+
+                MolliePaymentMethodData::DirectDebit(Box::new(DirectDebitMethodData {
+                    consumer_name,
+                    consumer_account: Secret::new(iban.peek().to_string()),
+                    consumer_bic: None, // BIC is optional for SEPA
+                }))
+            }
+            PaymentMethodData::BankDebit(_) => {
+                return Err(errors::ConnectorError::NotSupported {
+                    message: "Non-SEPA bank debit".to_string(),
+                    connector: "mollie",
+                }
+                .into());
             }
             _ => {
                 return Err(errors::ConnectorError::NotSupported {
