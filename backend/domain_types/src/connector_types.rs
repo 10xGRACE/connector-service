@@ -84,6 +84,7 @@ pub enum ConnectorEnum {
     Multisafepay,
     Payload,
     Fiservemea,
+    Finix,
     Paysafe,
     Datatrans,
     Bluesnap,

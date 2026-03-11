@@ -40,8 +40,9 @@ use self::transformers::{
     FinixAuthType, FinixCaptureRequest, FinixCaptureResponse, FinixErrorResponse,
     FinixIdentityRequest, FinixIdentityResponse, FinixPSyncRequest, FinixPSyncResponse,
     FinixPaymentInstrumentRequest, FinixPaymentInstrumentResponse, FinixRSyncRequest,
-    FinixRSyncResponse, FinixRefundRequest, FinixRefundResponse, FinixTransferRequest,
-    FinixTransferResponse, FinixVoidResponse, FinixVoidTransferRequest,
+    FinixRSyncResponse, FinixRefundRequest, FinixRefundResponse, FinixSetupMandateRequest,
+    FinixSetupMandateResponse, FinixTransferRequest, FinixTransferResponse, FinixVoidResponse,
+    FinixVoidTransferRequest,
 };
 use crate::{connectors::macros, types::ResponseRouterData, with_error_response_body};
 
@@ -197,6 +198,12 @@ macros::create_all_prerequisites!(
             request_body: FinixIdentityRequest,
             response_body: FinixIdentityResponse,
             router_data: RouterDataV2<CreateConnectorCustomer, PaymentFlowData, ConnectorCustomerData, ConnectorCustomerResponse>,
+        ),
+        (
+            flow: SetupMandate,
+            request_body: FinixSetupMandateRequest,
+            response_body: FinixSetupMandateResponse,
+            router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
         )
     ],
     amount_converters: [],
@@ -523,6 +530,37 @@ macros::macro_connector_implementation!(
     }
 );
 
+// SetupMandate Flow (MIT - Merchant Initiated Transaction)
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Finix,
+    curl_request: Json(FinixSetupMandateRequest),
+    curl_response: FinixSetupMandateResponse,
+    flow_name: SetupMandate,
+    resource_common_data: PaymentFlowData,
+    flow_request: SetupMandateRequestData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            self.build_headers(req)
+        }
+
+        fn get_url(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            let base_url = self.connector_base_url_payments(req);
+            Ok(format!("{base_url}/authorizations"))
+        }
+    }
+);
+
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     connector_types::PaymentIncrementalAuthorization for Finix<T>
 {
@@ -758,16 +796,6 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
         domain_types::connector_types::VerifyWebhookSourceFlowData,
         domain_types::router_request_types::VerifyWebhookSourceRequestData,
         domain_types::router_response_types::VerifyWebhookSourceResponseData,
-    > for Finix<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        SetupMandate,
-        PaymentFlowData,
-        SetupMandateRequestData<T>,
-        PaymentsResponseData,
     > for Finix<T>
 {
 }

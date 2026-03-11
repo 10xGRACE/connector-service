@@ -848,3 +848,157 @@ impl TryFrom<ResponseRouterData<FinixIdentityResponse, Self>>
         })
     }
 }
+
+// ===== SETUP MANDATE (MIT) REQUEST =====
+// Finix uses POST /authorizations for creating card holds (MIT)
+#[derive(Debug, Serialize)]
+pub struct FinixSetupMandateRequest {
+    pub amount: i64,
+    pub currency: String,
+    pub merchant: String,
+    pub source: String,
+    pub tags: Option<FinixTags>,
+}
+
+impl<
+        T: domain_types::payment_method_data::PaymentMethodDataTypes
+            + std::fmt::Debug
+            + Sync
+            + Send
+            + 'static
+            + Serialize,
+    >
+    TryFrom<
+        FinixRouterData<
+            RouterDataV2<
+                domain_types::connector_flow::SetupMandate,
+                PaymentFlowData,
+                domain_types::connector_types::SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for FinixSetupMandateRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: FinixRouterData<
+            RouterDataV2<
+                domain_types::connector_flow::SetupMandate,
+                PaymentFlowData,
+                domain_types::connector_types::SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let auth = FinixAuthType::try_from(&item.router_data.connector_auth_type)?;
+
+        // Get the payment instrument source from the tokenized payment method
+        // For MIT/SetupMandate, we need a tokenized Payment Instrument ID (PIxxx)
+        let source = item
+            .router_data
+            .resource_common_data
+            .get_payment_method_token()
+            .map_err(|_| errors::ConnectorError::MissingRequiredField {
+                field_name: "payment_method_token (from PaymentMethodToken flow)",
+            })?;
+
+        let source_id = match source {
+            domain_types::router_data::PaymentMethodToken::Token(token) => token.expose(),
+        };
+
+        // Use a small amount (100 cents = $1.00) for mandate setup if no amount specified
+        // This is standard practice for creating card holds for mandate setup
+        let amount = item
+            .router_data
+            .request
+            .minor_amount
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "minor_amount",
+            })?
+            .get_amount_as_i64();
+
+        Ok(Self {
+            amount,
+            currency: item.router_data.request.currency.to_string(),
+            merchant: auth.merchant_id.expose(),
+            source: source_id,
+            tags: Some(FinixTags {
+                order_number: item
+                    .router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            }),
+        })
+    }
+}
+
+// ===== SETUP MANDATE (MIT) RESPONSE =====
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FinixSetupMandateResponse {
+    pub id: String,
+    pub amount: i64,
+    pub currency: String,
+    pub state: FinixAuthorizationState,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FinixAuthorizationState {
+    Pending,
+    Succeeded,
+    Failed,
+    Canceled,
+    Unknown,
+}
+
+impl From<FinixAuthorizationState> for AttemptStatus {
+    fn from(state: FinixAuthorizationState) -> Self {
+        match state {
+            FinixAuthorizationState::Pending => AttemptStatus::Pending,
+            FinixAuthorizationState::Succeeded => AttemptStatus::Authorized,
+            FinixAuthorizationState::Failed => AttemptStatus::Failure,
+            FinixAuthorizationState::Canceled => AttemptStatus::Voided,
+            FinixAuthorizationState::Unknown => AttemptStatus::Unknown,
+        }
+    }
+}
+
+impl<T: domain_types::payment_method_data::PaymentMethodDataTypes>
+    TryFrom<ResponseRouterData<FinixSetupMandateResponse, Self>>
+    for RouterDataV2<
+        domain_types::connector_flow::SetupMandate,
+        PaymentFlowData,
+        domain_types::connector_types::SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<FinixSetupMandateResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let status = item.response.state.clone().into();
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: None,
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}

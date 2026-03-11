@@ -1608,6 +1608,20 @@ impl ForeignTryFrom<(&ConnectorAuthType, &connector_types::ConnectorEnum)>
                 }),
                 _ => Err(err().into()),
             },
+            ConnectorEnum::Finix => match auth {
+                ConnectorAuthType::MultiAuthKey {
+                    api_key,
+                    api_secret,
+                    key1,
+                    key2,
+                } => Ok(Self::Finix {
+                    api_key: api_key.clone(),
+                    api_secret: api_secret.clone(),
+                    merchant_id: key1.clone(),
+                    identity_id: key2.clone(),
+                }),
+                _ => Err(err().into()),
+            },
         }
     }
 }
