@@ -121,13 +121,30 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         let payment_method_data = &item.router_data.request.payment_method_data;
         let order_source = OrderSource::from(payment_method_data.clone());
 
-        // Handle payment info directly without generic constraints
-        let payment_info = match payment_method_data {
+        let merchant_txn_id = get_valid_transaction_id(
+            item.router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            "transaction_id",
+        )?;
+        let amount = item.router_data.request.minor_amount;
+
+        // Extract report group from metadata or use default
+        let report_group =
+            extract_report_group(&item.router_data.resource_common_data.connector_meta_data)
+                .unwrap_or_else(|| "rtpGrp".to_string());
+
+        let bill_to_address = get_billing_address(&item.router_data.resource_common_data);
+        let ship_to_address = get_shipping_address(&item.router_data.resource_common_data);
+
+        // Handle based on payment method type
+        let cnp_request = match payment_method_data {
             PaymentMethodData::Card(card_data) => {
+                // Build card payment info
                 let card_type = match card_data.card_network.clone() {
                     Some(network) => WorldpayvativCardType::try_from(network)?,
                     None => {
-                        // Fallback to BIN-based card issuer detection
                         let card_issuer =
                             domain_types::utils::get_card_issuer(card_data.card_number.peek())?;
                         WorldpayvativCardType::try_from(&card_issuer)?
@@ -149,41 +166,98 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     card_validation_num: Some(card_data.card_cvc.clone()),
                 };
 
-                PaymentInfo::Card(CardData {
+                let payment_info = PaymentInfo::Card(CardData {
                     card: worldpay_card,
                     processing_type: None,
                     network_transaction_id: None,
-                })
-            }
-            _ => {
-                return Err(ConnectorError::NotSupported {
-                    message: "Payment method".to_string(),
-                    connector: "worldpayvantiv",
+                });
+
+                // Build authorization or sale based on capture settings
+                let (authorization, sale) =
+                    if item.router_data.request.is_auto_capture()? && amount != MinorUnit::zero() {
+                        let sale = Sale {
+                            id: format!("{}_{}", OperationId::Sale, merchant_txn_id),
+                            report_group: report_group.clone(),
+                            customer_id: extract_customer_id(
+                                &item.router_data.resource_common_data.customer_id,
+                            )
+                            .map(Secret::new),
+                            order_id: merchant_txn_id.clone(),
+                            amount,
+                            order_source,
+                            bill_to_address: bill_to_address.clone(),
+                            ship_to_address,
+                            payment_info,
+                            enhanced_data: None,
+                            processing_instructions: None,
+                            cardholder_authentication: None,
+                        };
+                        (None, Some(sale))
+                    } else {
+                        let authorization = Authorization {
+                            id: format!("{}_{}", OperationId::Auth, merchant_txn_id),
+                            report_group: report_group.clone(),
+                            customer_id: extract_customer_id(
+                                &item.router_data.resource_common_data.customer_id,
+                            )
+                            .map(Secret::new),
+                            order_id: merchant_txn_id.clone(),
+                            amount,
+                            order_source,
+                            bill_to_address: bill_to_address.clone(),
+                            ship_to_address,
+                            payment_info,
+                            enhanced_data: None,
+                            processing_instructions: None,
+                            cardholder_authentication: None,
+                        };
+                        (Some(authorization), None)
+                    };
+
+                CnpOnlineRequest {
+                    version: worldpayvantiv_constants::WORLDPAYVANTIV_VERSION.to_string(),
+                    xmlns: worldpayvantiv_constants::XMLNS.to_string(),
+                    merchant_id: auth.merchant_id,
+                    authentication,
+                    authorization,
+                    sale,
+                    echeck_sale: None,
+                    capture: None,
+                    auth_reversal: None,
+                    void: None,
+                    credit: None,
                 }
-                .into());
             }
-        };
+            PaymentMethodData::BankDebit(
+                domain_types::payment_method_data::BankDebitData::AchBankDebit {
+                    account_number,
+                    routing_number,
+                    bank_type,
+                    bank_holder_type,
+                    ..
+                },
+            ) => {
+                // Build echeck data for ACH
+                let account_type = match (bank_type, bank_holder_type) {
+                    (
+                        Some(common_enums::BankType::Savings),
+                        Some(common_enums::BankHolderType::Business),
+                    ) => EcheckAccountType::CorporateSavings,
+                    (Some(common_enums::BankType::Savings), _) => EcheckAccountType::Savings,
+                    (_, Some(common_enums::BankHolderType::Business)) => {
+                        EcheckAccountType::Corporate
+                    }
+                    _ => EcheckAccountType::Checking,
+                };
 
-        let merchant_txn_id = get_valid_transaction_id(
-            item.router_data
-                .resource_common_data
-                .connector_request_reference_id
-                .clone(),
-            "transaction_id",
-        )?;
-        let amount = item.router_data.request.minor_amount;
+                let echeck_data = EcheckData {
+                    account_type,
+                    account_number: account_number.clone(),
+                    routing_number: routing_number.clone(),
+                    check_number: None,
+                };
 
-        // Extract report group from metadata or use default
-        let report_group =
-            extract_report_group(&item.router_data.resource_common_data.connector_meta_data)
-                .unwrap_or_else(|| "rtpGrp".to_string());
-
-        let bill_to_address = get_billing_address(&item.router_data.resource_common_data);
-        let ship_to_address = get_shipping_address(&item.router_data.resource_common_data);
-
-        let (authorization, sale) =
-            if item.router_data.request.is_auto_capture()? && amount != MinorUnit::zero() {
-                let sale = Sale {
+                let echeck_sale = EcheckSale {
                     id: format!("{}_{}", OperationId::Sale, merchant_txn_id),
                     report_group: report_group.clone(),
                     customer_id: extract_customer_id(
@@ -194,45 +268,30 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     amount,
                     order_source,
                     bill_to_address,
-                    ship_to_address,
-                    payment_info,
-                    enhanced_data: None,
-                    processing_instructions: None,
-                    cardholder_authentication: None,
+                    echeck: echeck_data,
                 };
-                (None, Some(sale))
-            } else {
-                let authorization = Authorization {
-                    id: format!("{}_{}", OperationId::Auth, merchant_txn_id),
-                    report_group: report_group.clone(),
-                    customer_id: extract_customer_id(
-                        &item.router_data.resource_common_data.customer_id,
-                    )
-                    .map(Secret::new),
-                    order_id: merchant_txn_id.clone(),
-                    amount,
-                    order_source,
-                    bill_to_address,
-                    ship_to_address,
-                    payment_info,
-                    enhanced_data: None,
-                    processing_instructions: None,
-                    cardholder_authentication: None,
-                };
-                (Some(authorization), None)
-            };
 
-        let cnp_request = CnpOnlineRequest {
-            version: worldpayvantiv_constants::WORLDPAYVANTIV_VERSION.to_string(),
-            xmlns: worldpayvantiv_constants::XMLNS.to_string(),
-            merchant_id: auth.merchant_id,
-            authentication,
-            authorization,
-            sale,
-            capture: None,
-            auth_reversal: None,
-            void: None,
-            credit: None,
+                CnpOnlineRequest {
+                    version: worldpayvantiv_constants::WORLDPAYVANTIV_VERSION.to_string(),
+                    xmlns: worldpayvantiv_constants::XMLNS.to_string(),
+                    merchant_id: auth.merchant_id,
+                    authentication,
+                    authorization: None,
+                    sale: None,
+                    echeck_sale: Some(echeck_sale),
+                    capture: None,
+                    auth_reversal: None,
+                    void: None,
+                    credit: None,
+                }
+            }
+            _ => {
+                return Err(ConnectorError::NotSupported {
+                    message: "Payment method not supported".to_string(),
+                    connector: "worldpayvantiv",
+                }
+                .into());
+            }
         };
 
         Ok(Self { cnp_request })
@@ -298,6 +357,8 @@ pub struct CnpOnlineRequest<T: PaymentMethodDataTypes> {
     pub authorization: Option<Authorization<T>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sale: Option<Sale<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub echeck_sale: Option<EcheckSale>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -415,11 +476,30 @@ pub struct RefundRequest {
     pub amount: MinorUnit,
 }
 
+// eCheck Sale request for ACH/BankDebit payments
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EcheckSale {
+    #[serde(rename = "@id")]
+    pub id: String,
+    #[serde(rename = "@reportGroup")]
+    pub report_group: String,
+    #[serde(rename = "@customerId", skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<Secret<String>>,
+    pub order_id: String,
+    pub amount: MinorUnit,
+    pub order_source: OrderSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bill_to_address: Option<BillToAddress>,
+    pub echeck: EcheckData,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum PaymentInfo<T: PaymentMethodDataTypes> {
     Card(CardData<T>),
     Token(TokenData),
+    Echeck(EcheckPayment),
 }
 
 #[derive(Debug, Serialize)]
@@ -520,6 +600,38 @@ impl TryFrom<&domain_types::utils::CardIssuer> for WorldpayvativCardType {
     }
 }
 
+// eCheck/ACH data structures for BankDebit support
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EcheckPayment {
+    pub echeck: EcheckData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bill_to_address: Option<BillToAddress>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EcheckData {
+    #[serde(rename = "accType")]
+    pub account_type: EcheckAccountType,
+    #[serde(rename = "accNum")]
+    pub account_number: Secret<String>,
+    #[serde(rename = "routingNum")]
+    pub routing_number: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "checkNum")]
+    pub check_number: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum EcheckAccountType {
+    Checking,
+    Savings,
+    Corporate,
+    #[serde(rename = "Corp Savings")]
+    CorporateSavings,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OrderSource {
@@ -549,7 +661,7 @@ impl<T: PaymentMethodDataTypes> From<PaymentMethodData<T>> for OrderSource {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BillToAddress {
     pub name: Option<Secret<String>>,
@@ -658,6 +770,8 @@ pub struct CnpOnlineResponse {
     pub authorization_response: Option<PaymentResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sale_response: Option<PaymentResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub echeck_sale_response: Option<PaymentResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_response: Option<CaptureResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1336,8 +1450,9 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         match (
             item.response.sale_response.as_ref(),
             item.response.authorization_response.as_ref(),
+            item.response.echeck_sale_response.as_ref(),
         ) {
-            (Some(sale_response), None) => {
+            (Some(sale_response), None, None) => {
                 let status =
                     get_attempt_status(WorldpayvantivPaymentFlow::Sale, sale_response.response)?;
 
@@ -1389,7 +1504,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     })
                 }
             }
-            (None, Some(auth_response)) => {
+            (None, Some(auth_response), None) => {
                 let status =
                     get_attempt_status(WorldpayvantivPaymentFlow::Auth, auth_response.response)?;
 
@@ -1441,7 +1556,60 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     })
                 }
             }
-            (None, None) => {
+            (None, None, Some(echeck_response)) => {
+                // Handle echeck sale response
+                let status =
+                    get_attempt_status(WorldpayvantivPaymentFlow::Sale, echeck_response.response)?;
+
+                if is_payment_failure(status) {
+                    let error_response = ErrorResponse {
+                        code: echeck_response.response.to_string(),
+                        message: echeck_response.message.clone(),
+                        reason: Some(echeck_response.message.clone()),
+                        status_code: item.http_code,
+                        attempt_status: Some(status),
+                        connector_transaction_id: Some(echeck_response.cnp_txn_id.clone()),
+                        network_decline_code: None,
+                        network_advice_code: None,
+                        network_error_message: None,
+                    };
+
+                    Ok(Self {
+                        resource_common_data: PaymentFlowData {
+                            status,
+                            ..item.router_data.resource_common_data
+                        },
+                        response: Err(error_response),
+                        ..item.router_data
+                    })
+                } else {
+                    let payments_response = PaymentsResponseData::TransactionResponse {
+                        resource_id: ResponseId::ConnectorTransactionId(
+                            echeck_response.cnp_txn_id.clone(),
+                        ),
+                        redirection_data: None,
+                        mandate_reference: None,
+                        connector_metadata: None,
+                        network_txn_id: echeck_response
+                            .network_transaction_id
+                            .clone()
+                            .map(|id| id.expose()),
+                        connector_response_reference_id: Some(echeck_response.order_id.clone()),
+                        incremental_authorization_allowed: None,
+                        status_code: item.http_code,
+                    };
+
+                    Ok(Self {
+                        resource_common_data: PaymentFlowData {
+                            status,
+                            ..item.router_data.resource_common_data
+                        },
+                        response: Ok(payments_response),
+                        ..item.router_data
+                    })
+                }
+            }
+            (None, None, None) => {
                 let error_response = ErrorResponse {
                     code: item.response.response_code,
                     message: item.response.message.clone(),
@@ -1463,8 +1631,8 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     ..item.router_data
                 })
             }
-            (_, _) => Err(ConnectorError::UnexpectedResponseError(
-                "Only one of 'sale_response' or 'authorization_response' is expected"
+            (_, _, _) => Err(ConnectorError::UnexpectedResponseError(
+                "Only one of 'sale_response', 'authorization_response', or 'echeck_sale_response' is expected"
                     .to_string()
                     .into(),
             )
@@ -1832,6 +2000,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             authentication,
             authorization: None,
             sale: None,
+            echeck_sale: None,
             capture: Some(capture),
             auth_reversal: None,
             void: None,
@@ -1893,6 +2062,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             authentication,
             authorization: None,
             sale: None,
+            echeck_sale: None,
             capture: None,
             auth_reversal: Some(auth_reversal),
             void: None,
@@ -1968,6 +2138,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             authentication,
             authorization: None,
             sale: None,
+            echeck_sale: None,
             capture: None,
             auth_reversal: None,
             void: None,
@@ -2039,6 +2210,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             authentication,
             authorization: None,
             sale: None,
+            echeck_sale: None,
             capture: None,
             auth_reversal: None,
             void: Some(void),
@@ -2189,6 +2361,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             authentication,
             authorization: None,
             sale: None,
+            echeck_sale: None,
             capture: Some(capture),
             auth_reversal: None,
             void: None,
@@ -2325,6 +2498,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             authentication,
             authorization: None,
             sale: None,
+            echeck_sale: None,
             capture: None,
             auth_reversal: None,
             void: Some(void),
