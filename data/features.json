@@ -1,0 +1,9 @@
+{
+  "features": [
+    {
+      "id": "mit",
+      "name": "MIT",
+      "description": "Merchant Initiated Transactions / Recurring Payments / Card-on-file / Stored Credentials"
+    }
+  ]
+}

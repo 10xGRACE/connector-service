@@ -1,0 +1,162 @@
+{
+  "authipay": [
+    "https://authipay.com/wp-content/uploads/authipay-api.pdf",
+    "https://authipay.com/wp-content/uploads/authipay-connect.pdf",
+    "https://authipay.com/i-am-a-developer/developer-guides",
+    "https://authipay.com/wp_super_faq/card-types-can-used-recurring-transactions"
+  ],
+  "rapyd": [
+    "https://docs.rapyd.net/en/merchant-api-reference.html",
+    "https://docs.rapyd.net/en/create-payment.html",
+    "https://docs.rapyd.net/en/creating-a-card-payment-with-a-network-reference-id.html",
+    "https://docs.rapyd.net/en/add-payment-method-to-customer.html",
+    "https://docs.rapyd.net/en/subscription.html",
+    "https://docs.rapyd.net/en/authentication.html",
+    "https://docs.rapyd.net/en/request-signatures.html",
+    "https://docs.rapyd.net/en/header-parameters.html",
+    "https://docs.rapyd.net/en/webhooks.html",
+    "https://docs.rapyd.net/en/webhook-authentication.html",
+    "https://docs.rapyd.net/en/idempotency.html",
+    "https://docs.rapyd.net/en/error-messages.html",
+    "https://docs.rapyd.net/en/rapyd-error-codes.html",
+    "https://docs.rapyd.net/en/testing-for-payment-api.html",
+    "https://docs.rapyd.net/en/customer-payment-method.html"
+  ],
+  "finix": [
+    "https://finix.com/docs/api/subscriptions",
+    "https://finix.com/docs/guides/subscriptions/subscriptions-quickstart",
+    "https://finix.com/docs/guides/subscriptions/recurring-payment-guidelines",
+    "https://finix.com/docs/api/transfers",
+    "https://finix.com/docs/api/authorizations",
+    "https://finix.com/docs/api/payment-instruments",
+    "https://finix.com/docs/api/webhooks",
+    "https://finix.com/docs/additional-resources/developers/implementation-and-testing/error-codes"
+  ],
+  "multisafepay": [
+    "https://docs.multisafepay.com/docs/recurring-payments",
+    "https://docs.multisafepay.com/reference/recurringpaymentsinitial",
+    "https://docs.multisafepay.com/reference/recurringpaymentssubsequent",
+    "https://docs.multisafepay.com/reference/authentication",
+    "https://docs.multisafepay.com/reference/error-reference",
+    "https://docs.multisafepay.com/docs/webhook",
+    "https://docs.multisafepay.com/docs/testing"
+  ],
+  "trustpayments": [
+    "https://help.trustpayments.com/hc/en-us/categories/360003712358-TRU-Connect"
+  ],
+  "globalpay": [
+    "https://developer.globalpayments.com/docs/payments/tokenization/card-storage-guide",
+    "https://developer.globalpayments.com/docs/payments/recurring/overview",
+    "https://developer.globalpayments.com/docs/payments/recurring/recurring-payments-guide",
+    "https://developer.globalpayments.com/docs/payments/recurring/credentials-on-file",
+    "https://developer.globalpayments.com/api/transactions",
+    "https://developer.globalpayments.com/api/payment-methods-tokenization",
+    "https://developer.globalpayments.com/api/verifications",
+    "https://developer.globalpayments.com/api/access-token",
+    "https://developer.globalpayments.com/docs/integration-options/api",
+    "https://developer.globalpayments.com/docs/getting-started/testing"
+  ],
+  "nmi": [
+    "https://docs.nmi.com/docs/credential-on-file",
+    "https://docs.nmi.com/docs/using-for-transactions",
+    "https://docs.nmi.com/docs/customer-vault",
+    "https://docs.nmi.com/docs/adding-customers-to-vault",
+    "https://docs.nmi.com/reference/getting-started",
+    "https://docs.nmi.com/reference/create-sale-v5",
+    "https://docs.nmi.com/reference/create-subscription-v5",
+    "https://docs.nmi.com/reference/authentication",
+    "https://docs.nmi.com/reference/overview",
+    "https://docs.nmi.com/reference/recurring-events",
+    "https://docs.nmi.com/reference/response-codes"
+  ],
+  "shift4": [
+    "https://dev.shift4.com/docs/api",
+    "https://dev.shift4.com/docs",
+    "https://docs.shift4.com"
+  ],
+  "nuvei": [
+    "https://docs.nuvei.com/documentation/features/card-operations/merchant-initiated-transactions/",
+    "https://docs.nuvei.com/documentation/additional-links/rest-2-0/features/card-flows-operations/merchant-initiated-transactions/",
+    "https://docs.nuvei.com/documentation/additional-links/api-reference/",
+    "https://docs.nuvei.com/documentation/additional-links/rest-2-0/features/authentication/",
+    "https://docs.nuvei.com/documentation/integration/webhooks/",
+    "https://docs.nuvei.com/documentation/additional-links/rest-2-0/integration/webhooks/",
+    "https://docs.nuvei.com/documentation/integration/testing/testing-cards/"
+  ],
+  "billwerk": [
+    "https://docs.frisbii.com/reference",
+    "https://docs.frisbii.com/reference/authentication",
+    "https://docs.frisbii.com/reference/charge",
+    "https://docs.frisbii.com/reference/subscription",
+    "https://docs.frisbii.com/reference/payment-method",
+    "https://docs.frisbii.com/reference/webhook",
+    "https://docs.frisbii.com/reference/errors",
+    "https://docs.frisbii.com/reference/testing"
+  ],
+  "barclaycard": [],
+  "bambora": [
+    "https://docs.connect.worldline-solutions.com/accepting-payments/payment-scenarios/merchant-initiated-transaction",
+    "https://docs.connect.worldline-solutions.com/accepting-payments/payment-scenarios/recurring-subscription",
+    "https://docs.connect.worldline-solutions.com/accepting-payments/payment-scenarios/tokenization/card-on-file",
+    "https://apireference.connect.worldline-solutions.com/s2sapi/v1/en_US/index.html",
+    "https://docs.connect.worldline-solutions.com/documentation/error-handling/idempotent-requests",
+    "https://docs.connect.worldline-solutions.com/documentation/webhooks/event-types",
+    "https://docs.connect.worldline-solutions.com/documentation/error-handling/error-codes",
+    "https://docs.direct.worldline-solutions.com/en/integration/api-developer-guide/authentication",
+    "https://docs.direct.worldline-solutions.com/en/payment-methods-and-features/advanced-features/card-on-file/"
+  ],
+  "mollie": [
+    "https://docs.mollie.com/docs/recurring-payments",
+    "https://docs.mollie.com/reference/create-payment",
+    "https://docs.mollie.com/reference/get-payment",
+    "https://docs.mollie.com/reference/create-customer",
+    "https://docs.mollie.com/reference/create-mandate",
+    "https://docs.mollie.com/reference/create-subscription",
+    "https://docs.mollie.com/reference/authentication",
+    "https://docs.mollie.com/reference/webhooks",
+    "https://docs.mollie.com/reference/webhooks-best-practices",
+    "https://docs.mollie.com/reference/api-idempotency",
+    "https://docs.mollie.com/reference/handling-errors",
+    "https://docs.mollie.com/reference/testing",
+    "https://docs.mollie.com/reference/status-reasons"
+  ],
+  "airwallex": [
+    "https://www.airwallex.com/docs/api",
+    "https://www.airwallex.com/docs/developer-tools/api",
+    "https://www.airwallex.com/docs/developer-tools/webhooks/webhooks-overview",
+    "https://www.airwallex.com/docs/developer-tools/webhooks/listen-for-webhook-events",
+    "https://www.airwallex.com/docs/developer-tools/sandbox-environment/sandbox-environment-overview",
+    "https://www.airwallex.com/docs/payments/overview",
+    "https://www.airwallex.com/docs/billing/overview"
+  ],
+  "mifinity": [],
+  "jpmorgan": [
+    "https://developer.authorize.net/api/reference/features/card-on-file.html",
+    "https://developer.authorize.net/api/reference/features/recurring_billing.html",
+    "https://developer.authorize.net/api/reference/features/payment-transactions.html",
+    "https://developer.authorize.net/api/reference/features/customer_profiles.html",
+    "https://developer.authorize.net/api/reference/features/webhooks.html",
+    "https://developer.authorize.net/api/reference/responseCodes.html",
+    "https://developer.authorize.net/hello_world/testing_guide.html",
+    "https://developer.authorize.net/api.html"
+  ],
+  "redsys": [
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-funcionalidades-avanzadas/tokenizacion/tokenizacion-mit/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-funcionalidades-avanzadas/tokenizacion/tokenizacion-cit/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-funcionalidades-avanzadas/tokenizacion/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-tipos-de-integracion/desarrolladores-rest/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/integrate-con-nosotros/parametros-de-entrada-y-salida/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-operativa/autenticacion-reforzada-sca-y-normativa-psd2/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-operativa/autorizacion/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-operativa/devolver-o-anular-un-pago/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-operativa/firmar-una-operacion/",
+    "https://pagosonline.redsys.es/desarrolladores-inicio/integrate-con-nosotros/tarjetas-y-entornos-de-prueba/"
+  ],
+  "trustpay": [
+    "https://doc.trustpay.eu/",
+    "https://doc.trustpay.eu/#card-on-file-v02",
+    "https://doc.trustpay.eu/#recurring-v02",
+    "https://doc.trustpay.eu/#payment-notification-v02",
+    "https://doc.trustpay.eu/#test-cards-v02"
+  ]
+}

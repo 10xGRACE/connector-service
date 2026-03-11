@@ -1,0 +1,116 @@
+{
+  "authipay": {
+    "mit": {
+      "integration_doc_url": "https://authipay.com/wp-content/uploads/authipay-api.pdf",
+      "notes": "problematic. Score: 5/10. PDF-based documentation only. API supports MIT via SetupMandate and RepeatPayment flows (confirmed via connector implementation). HMAC-SHA256 authentication documented. No web-accessible API reference - requires PDF download. Verified 2026-03-11."
+    }
+  },
+  "finix": {
+    "mit": {
+      "integration_doc_url": "https://finix.com/docs/guides/subscriptions/subscriptions-quickstart",
+      "notes": "valid. Score: 10/10. Comprehensive Subscriptions API for recurring/MIT payments. Supports card and ACH recurring billing. Features include trial periods, discount phases, fixed-length subscriptions, webhook notifications. Authentication via HTTP Basic Auth. Idempotency support via idempotency_id. Full API reference with curl examples. Verified 2026-03-11."
+    }
+  },
+  "multisafepay": {
+    "mit": {
+      "integration_doc_url": "https://docs.multisafepay.com/docs/recurring-payments",
+      "notes": "valid. Score: 9/10. Comprehensive recurring payments documentation with 3 models: cardOnFile, subscription, unscheduled. API supports initial payment (POST /v1/json/orders) and subsequent merchant-initiated payments using tokens. Supports cards (Amex, Maestro, Mastercard, Visa) and direct debit. Authentication via API key in query parameter. HMAC-SHA512 webhook signature verification documented. Test environment with detailed test card numbers. No explicit idempotency key documentation found. Verified 2026-03-11."
+    }
+  },
+  "trustpayments": {
+    "mit": {
+      "integration_doc_url": "https://help.trustpayments.com/hc/en-us/categories/360003712358-TRU-Connect",
+      "notes": "problematic. Score: 3/10. Connector implementation shows support for SetupMandate and RepeatPayment flows (confirmed via codebase). Authentication uses Basic Auth with username/password. API endpoint uses POST /json/ format. Help center structure suggests Webservices API documentation exists but most URLs return 404 errors or redirect to homepage. No detailed MIT-specific documentation found. Documentation appears to be behind authentication wall or in PDF format. Verified 2026-03-11."
+    }
+  },
+  "globalpay": {
+    "mit": {
+      "integration_doc_url": "https://developer.globalpayments.com/docs/payments/recurring/recurring-payments-guide",
+      "notes": "valid. Score: 8/10. Comprehensive card storage and recurring payments documentation. Tokenization API via POST /ucp/payment-methods. Subsequent payments using stored card tokens via POST /ucp/transactions. OAuth2 Bearer token authentication. MIT flows support SetupMandate and RepeatPayment via connector implementation. Clear API examples with curl commands. X-GP-Version header for versioning (2021-03-22). Testing environment available. No explicit idempotency key documentation found. No webhook signature verification details documented. Verified 2026-03-11."
+    }
+  },
+  "rapyd": {
+    "mit": {
+      "integration_doc_url": "https://docs.rapyd.net/en/creating-a-card-payment-with-a-network-reference-id.html",
+      "notes": "valid. Score: 9/10. Comprehensive MIT documentation via Network Reference ID mechanism. POST /v1/payments endpoint with initiation_type (recurring, installment, unscheduled, moto). HMAC-SHA256 signature authentication with access_key, salt, timestamp, and signature headers. Supports card tokenization via customer payment methods and card tokens. Webhook authentication with HMAC-SHA256 signature verification. Idempotency key support via idempotency header. Extensive error codes for payment, card network, and authentication errors. Sandbox testing environment with 3DS simulation. Full curl examples in multiple languages. No explicit merchant-initiated transaction (MIT) label but covered via initiation_type field and network_reference_id flow. Verified 2026-03-11."
+    }
+  },
+  "nmi": {
+    "mit": {
+      "integration_doc_url": "https://docs.nmi.com/docs/credential-on-file",
+      "notes": "valid. Score: 8/10. Comprehensive Credential on File documentation with CIT and MIT transaction flows. POST /api/v5/payments/sale endpoint with full request/response schemas. API key authentication via Authorization header. Customer Vault system for card tokenization and recurring payments. Subscriptions API for automated recurring billing. Stored credentials support with stored_credential_indicator (stored/used), initiated_by (customer/merchant), and initial_transaction_id parameters. PSD2/3DS compliance for initial transactions. Webhook support for transaction and recurring events. curl examples in multiple languages (Node.js, Python, Java, .NET, PHP). Response codes documented. No explicit idempotency key documentation found. No webhook signature verification details documented. Verified 2026-03-11."
+    }
+  },
+  "shift4": {
+    "mit": {
+      "integration_doc_url": "https://dev.shift4.com/docs/api",
+      "notes": "valid. Score: 9/10. Comprehensive REST API documentation with full MIT support. POST https://api.shift4.com/charges endpoint. HTTP Basic Auth with API Secret Key. MIT parameters: type field supports 'merchant_initiated', 'first_recurring', 'subsequent_recurring', 'customer_initiated'. Card tokenization via card tokens or customer cards. Idempotency support via Idempotency-Key header. Complete error codes (card_error, invalid_request, gateway_error, rate_limit_error) with detailed sub-codes. Connector implementation confirms SetupMandate and RepeatPayment flow support. curl examples for all operations. Webhooks mentioned but not detailed in API reference. Comprehensive request/response schemas for charges, refunds, customers, cards. Supports capture, void, and incremental authorization flows. Verified 2026-03-11."
+    }
+  },
+  "billwerk": {
+    "mit": {
+      "integration_doc_url": "https://docs.frisbii.com/reference/subscription",
+      "notes": "valid. Score: 9/10. Comprehensive API documentation for recurring payments and MIT via Subscription API and Charge API. POST endpoints for Create Charge, Create Subscription, and Settle operations. HTTP Basic Auth with API keys. Subscription model supports automated recurring billing with stored payment methods. Charge API allows merchant-initiated transactions using stored payment method tokens. Webhook support with secret generation for event notifications. Connector implementation confirms SetupMandate and RepeatPayment flow support. Full error handling and transaction tracking documented. Testing environment available. Response schemas and request parameters well-documented. No explicit idempotency key header documented. No explicit signature verification for webhooks detailed. Verified 2026-03-11."
+    }
+  },
+  "nuvei": {
+    "mit": {
+      "integration_doc_url": "https://docs.nuvei.com/documentation/features/card-operations/merchant-initiated-transactions/",
+      "notes": "valid. Score: 10/10. Comprehensive MIT documentation covering both REST 1.0 and REST 2.0 APIs. Full support for initial CIT and subsequent MIT payments via POST /payment (v1) and POST /payments (v2) endpoints. REST 1.0 uses SHA-256 checksum authentication; REST 2.0 uses x-api-key header. MIT parameters: isRebilling (0/1), rebillingType (MIT/Recurring/NoShow/DelayedCharges), relatedTransactionId, externalSchemeDetails for external PSP migration. 3DS support with rebillFrequency and rebillExpiry. Webhooks (DMNs) with HMAC-SHA256 signature verification. Idempotency via clientRequestId. Extensive test card database with 3DS simulation. Error codes documented (errCode, reason, providerResponseDetails). Full curl examples and JSON request/response schemas. Verified 2026-03-11."
+    }
+  },
+  "powertranz": {
+    "mit": {
+      "integration_doc_url": null,
+      "notes": "insufficient. Score: 1/10. PowerTranz API documentation is not publicly accessible. Documentation is available only via password-protected developer portal (powertranz.readme.io) or upon request through contact form. Marketing pages confirm MIT/recurring payment support. Connector implementation confirms SetupMandate and RepeatPayment flow support with REST API endpoints (/sale, /auth, /capture, /void, /refund). Authentication via PowerTranz-PowerTranzId and PowerTranz-PowerTranzPassword headers. No public API reference, request/response schemas, webhook docs, or error codes available without merchant account access. Verified 2026-03-12."
+    }
+  },
+  "barclaycard": {
+    "mit": {
+      "integration_doc_url": null,
+      "notes": "insufficient. Score: 0/10. No publicly accessible API documentation found. Connector implementation uses Smartpay Fuse API (api.smartpayfuse-test.barclaycard / api.smartpayfuse.barclaycard) with HMAC-SHA256 authentication. Codebase shows support for SetupMandate and RepeatPayment flows. Documentation appears to be behind authentication wall or available only to registered merchants. Verified 2026-03-12."
+    }
+  },
+  "bambora": {
+    "mit": {
+      "integration_doc_url": "https://docs.connect.worldline-solutions.com/accepting-payments/payment-scenarios/merchant-initiated-transaction",
+      "notes": "valid. Score: 9/10. Bambora was acquired by Worldline and documentation is now hosted on Worldline Connect. Comprehensive MIT documentation covering Merchant Initiated Transactions and Recurring Payments. Supports recurring transactions (isRecurring=true with recurringPaymentSequenceIndicator=recurring) and unscheduled Card On File transactions (unscheduledCardOnFileRequestor=merchantInitiated). Requires initial Consumer Initiated Transaction (CIT) with SCA. POST /v1/payments endpoint for creating payments. API Key + Secret authentication with HMAC-SHA256 signature verification. Comprehensive error codes and response handling. Idempotency support via X-GCS-Idempotence-Key header. Webhook event types documented for payment state changes. Full API reference with request/response schemas and curl examples. Card On File tokenization support. Testing environment available. Verified 2026-03-12."
+    }
+  },
+  "mollie": {
+    "mit": {
+      "integration_doc_url": "https://docs.mollie.com/docs/recurring-payments",
+      "notes": "valid. Score: 10/10. Comprehensive recurring payments (MIT) documentation with detailed integration guide. Supports both on-demand recurring payments and periodic subscriptions. First payment creates mandate via customer-initiated transaction (CIT) with sequenceType=first. Subsequent merchant-initiated payments use sequenceType=recurring with mandateId. Supports credit cards, PayPal, SEPA Direct Debit, and other methods. Customers API, Mandates API, and Subscriptions API fully documented. Authentication via Bearer token API key. Idempotency-Key header supported. Webhooks with signature verification documented. Testing environment with test card numbers and changePaymentState for simulating payment states. Full curl examples for all operations. Error codes and status reasons documented. Verified 2026-03-12."
+    }
+  },
+  "airwallex": {
+    "mit": {
+      "integration_doc_url": "https://www.airwallex.com/docs/developer-tools/api",
+      "notes": "valid. Score: 8/10. Airwallex provides comprehensive API documentation with Payment Intents API for processing payments. Connector implementation confirms SetupMandate and RepeatPayment flow support. Authentication via OAuth2 Bearer token (POST /api/v1/authentication/login with client_id and api_key). Payment Intents API supports creating, confirming, capturing, and managing payments via POST/GET endpoints (/pa/payment_intents). Webhook documentation covers event subscriptions, delivery, retries, and signature verification. Sandbox environment available for testing. Error handling documented. MIT parameters include merchant_initiated flag for subsequent payments. Missing: explicit recurring payment flow documentation, idempotency key documentation, detailed error code reference for payment-specific errors. Verified 2026-03-12."
+    }
+  },
+  "mifinity": {
+    "mit": {
+      "integration_doc_url": null,
+      "notes": "not_applicable. Score: 0/10. MiFinity is an e-wallet/payment facilitator that does not support traditional MIT (Merchant Initiated Transactions / Recurring Payments / Card-on-file / Stored Credentials) flows. Their API offers PayAnyBank (bank transfers), PayAnyCard/PayMyCard (card payouts), and Account-to-Account transfers. These are payout/withdrawal solutions, not stored credential or recurring billing systems. No documentation found for SetupMandate, RepeatPayment, card tokenization, or subscription flows. Verified 2026-03-12."
+    }
+  },
+  "jpmorgan": {
+    "mit": {
+      "integration_doc_url": "https://developer.authorize.net/api/reference/features/card-on-file.html",
+      "notes": "valid. Score: 9/10. JPMorgan Chase Payment Solutions leverages Authorize.net as their payment gateway platform. Comprehensive MIT documentation via Card-On-File (COF) Transactions guide with full support for Customer-Initiated Transactions (CITs) and Merchant-Initiated Transactions (MITs). API uses XML/JSON over HTTPS with API Login ID and Transaction Key authentication. MIT parameters include isSubsequentAuth, originalNetworkTransId, originalAuthAmount, and reason codes (resubmission, reauthorization, delayedcharge, noshow) for industry practice MITs. Recurring billing supported via Automated Recurring Billing (ARB) API with subscription management. Customer Profiles API for secure card tokenization. Webhooks with HMAC-SHA512 signature verification. Comprehensive error codes reference. Testing environment via sandbox.authorize.net. Idempotency supported via duplicateWindow setting. Full curl examples and request/response schemas documented. Verified 2026-03-12."
+    }
+  },
+  "redsys": {
+    "mit": {
+      "integration_doc_url": "https://pagosonline.redsys.es/desarrolladores-inicio/documentacion-funcionalidades-avanzadas/tokenizacion/tokenizacion-mit/",
+      "notes": "valid. Score: 9/10. Comprehensive MIT (Merchant Initiated Transactions) documentation via REST API. Full support for COF (Credential on File) operations including Installments (I), Recurring (R), Reauthorization (H), Resubmission (E), Delayed (D), Incremental (M), No Show (N), and Others (C). API endpoint: POST /sis/rest/trataPeticionREST. Authentication via HMAC SHA-512 signature with AES CBC key diversification. Key MIT parameters: Ds_Merchant_IDENTIFIER (token), Ds_Merchant_COF_INI (S/N), Ds_Merchant_COF_TYPE, Ds_Merchant_COF_TXNID, Ds_Merchant_EXCEP_SCA=MIT, Ds_Merchant_DIRECTPAYMENT=true. PSD2/SCA compliance with exenciones (TRA, LWV, MIT). Webhook notifications via HTTP POST to Ds_Merchant_MerchantURL. Comprehensive error codes and test card numbers documented. Testing environment available at sis-t.redsys.es. No explicit idempotency key header - relies on unique Ds_Order. Verified 2026-03-12."
+    }
+  },
+  "trustpay": {
+    "mit": {
+      "integration_doc_url": "https://doc.trustpay.eu/",
+      "notes": "valid. Score: 8/10. Comprehensive Card-on-File and Recurring payments documentation (now branded as finby). Card-on-File: PaymentType=1 for registration, PaymentType=2 for merchant-initiated purchases using CardId token. Recurring payments: PaymentType=3 for initial payment, PaymentType=4 for subsequent merchant-initiated payments using PaymentRequestId. API endpoints: POST https://amapi.finby.eu/mapi5/Card/PayPopup. Authentication via HMAC-SHA256 signature with secret key. Key MIT parameters: PaymentType (1-4), CardId (token), PaymentRequestId (for recurring). Webhook notifications via NotificationUrl with JSON payload containing transaction status and CardId. Test cards available for simulating success/failure scenarios. Connector implementation confirms SetupMandate and RepeatPayment flow support. No explicit idempotency key documented. No webhook signature verification details found. Mixed frontend/backend content - includes iframe/JS integration. Verified 2026-03-12."
+    }
+  }
+}
