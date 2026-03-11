@@ -428,3 +428,4 @@ sdk/java/smoke-test/gradle*
 sdk/java/bin
 
 artifacts/
+creds.json
