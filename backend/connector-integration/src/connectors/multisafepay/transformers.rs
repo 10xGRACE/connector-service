@@ -60,6 +60,8 @@ pub enum Gateway {
     DirectBank,
     #[serde(rename = "MBWAY")]
     MbWay,
+    #[serde(rename = "DIRECTDEBIT")]
+    DirectDebit,
 }
 
 // ===== HELPER FUNCTIONS =====
@@ -138,8 +140,8 @@ fn get_order_type_from_payment_method<T: PaymentMethodDataTypes>(
             .attach_printable("Bank redirect payment method not supported")?,
         },
         PaymentMethodData::PayLater(_) => Type::Redirect,
-        PaymentMethodData::BankDebit(_)
-        | PaymentMethodData::BankTransfer(_)
+        PaymentMethodData::BankDebit(_) => Type::Direct,
+        PaymentMethodData::BankTransfer(_)
         | PaymentMethodData::Crypto(_)
         | PaymentMethodData::Reward
         | PaymentMethodData::RealTimePayment(_)
@@ -296,9 +298,18 @@ fn get_gateway_from_payment_method<T: PaymentMethodDataTypes>(
             ))
             .attach_printable("Wallet payment method not supported")?,
         },
+        PaymentMethodData::BankDebit(ref bank_debit_data) => match bank_debit_data {
+            domain_types::payment_method_data::BankDebitData::SepaBankDebit { .. }
+            | domain_types::payment_method_data::BankDebitData::SepaGuaranteedBankDebit {
+                ..
+            } => Gateway::DirectDebit,
+            _ => Err(errors::ConnectorError::NotImplemented(
+                crate::utils::get_unimplemented_payment_method_error_message("multisafepay"),
+            ))
+            .attach_printable("Bank debit payment method not supported")?,
+        },
         PaymentMethodData::MandatePayment
         | PaymentMethodData::PayLater(_)
-        | PaymentMethodData::BankDebit(_)
         | PaymentMethodData::BankTransfer(_)
         | PaymentMethodData::Crypto(_)
         | PaymentMethodData::Reward
@@ -440,13 +451,25 @@ pub struct CustomerInfo {
 
 #[derive(Debug, Serialize)]
 pub struct GatewayInfo<T: PaymentMethodDataTypes> {
-    pub card_number: RawCardNumber<T>,
-    pub card_expiry_date: i64, // Format: YYMM as integer
-    pub card_cvc: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_number: Option<RawCardNumber<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_expiry_date: Option<i64>, // Format: YYMM as integer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_cvc: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub card_holder_name: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flexible_3d: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub moto: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub term_url: Option<String>,
+    // Fields for SEPA Direct Debit
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<Secret<String>>, // IBAN for SEPA
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_holder_name: Option<Secret<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -525,7 +548,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         let order_type = get_order_type_from_payment_method(&item.request.payment_method_data)?;
         let gateway = get_gateway_from_payment_method(&item.request.payment_method_data)?;
 
-        // Build gateway_info only for card payments (direct transactions with cards)
+        // Build gateway_info for card or bank debit payments (direct transactions)
         let gateway_info = match (&order_type, &item.request.payment_method_data) {
             (Type::Direct, PaymentMethodData::Card(card_data)) => {
                 // Build gateway_info with card details
@@ -549,19 +572,65 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .attach_printable("Failed to parse card expiry date as integer")?;
 
                 Some(GatewayInfo {
-                    card_number: card_data.card_number.clone(),
-                    card_expiry_date,
-                    card_cvc: card_data.card_cvc.clone(),
+                    card_number: Some(card_data.card_number.clone()),
+                    card_expiry_date: Some(card_expiry_date),
+                    card_cvc: Some(card_data.card_cvc.clone()),
                     card_holder_name: None,
                     flexible_3d: None,
                     moto: None,
                     term_url: None,
+                    account_id: None,
+                    account_holder_name: None,
                 })
+            }
+            (Type::Direct, PaymentMethodData::BankDebit(bank_debit_data)) => {
+                // Build gateway_info for SEPA direct debit
+                match bank_debit_data {
+                    domain_types::payment_method_data::BankDebitData::SepaBankDebit {
+                        iban,
+                        bank_account_holder_name,
+                    }
+                    | domain_types::payment_method_data::BankDebitData::SepaGuaranteedBankDebit {
+                        iban,
+                        bank_account_holder_name,
+                    } => {
+                        let account_holder = bank_account_holder_name
+                            .clone()
+                            .or_else(|| item.resource_common_data.get_billing_full_name().ok());
+                        Some(GatewayInfo {
+                            card_number: None,
+                            card_expiry_date: None,
+                            card_cvc: None,
+                            card_holder_name: None,
+                            flexible_3d: None,
+                            moto: None,
+                            term_url: None,
+                            account_id: Some(iban.clone()),
+                            account_holder_name: account_holder,
+                        })
+                    }
+                    _ => None,
+                }
             }
             _ => None,
         };
 
         // Build customer info
+        // Try to get email from request.email first, then from billing address
+        let email = item
+            .request
+            .email
+            .clone()
+            .or_else(|| {
+                item.resource_common_data
+                    .get_optional_billing()
+                    .and_then(|b| b.email.clone())
+            })
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "email",
+            })
+            .attach_printable("Missing email for transaction")?;
+
         let customer = CustomerInfo {
             locale: None,
             ip_address: None,
@@ -570,16 +639,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .connector_request_reference_id
                     .clone(),
             ),
-            email: item
-                .request
-                .email
-                .clone()
-                .ok_or(errors::ConnectorError::MissingRequiredField {
-                    field_name: "email",
-                })
-                .attach_printable("Missing email for transaction")?
-                .expose()
-                .expose(),
+            email: email.expose().expose(),
         };
 
         // Build payment_options
@@ -660,7 +720,7 @@ impl<T: PaymentMethodDataTypes>
         let order_type = get_order_type_from_payment_method(&item.request.payment_method_data)?;
         let gateway = get_gateway_from_payment_method(&item.request.payment_method_data)?;
 
-        // Build gateway_info only for card payments (direct transactions with cards)
+        // Build gateway_info for card or bank debit payments (direct transactions)
         let gateway_info = match (&order_type, &item.request.payment_method_data) {
             (Type::Direct, PaymentMethodData::Card(card_data)) => {
                 // Build gateway_info with card details
@@ -684,14 +744,45 @@ impl<T: PaymentMethodDataTypes>
                     .attach_printable("Failed to parse card expiry date as integer")?;
 
                 Some(GatewayInfo {
-                    card_number: card_data.card_number.clone(),
-                    card_expiry_date,
-                    card_cvc: card_data.card_cvc.clone(),
+                    card_number: Some(card_data.card_number.clone()),
+                    card_expiry_date: Some(card_expiry_date),
+                    card_cvc: Some(card_data.card_cvc.clone()),
                     card_holder_name: None,
                     flexible_3d: None,
                     moto: None,
                     term_url: None,
+                    account_id: None,
+                    account_holder_name: None,
                 })
+            }
+            (Type::Direct, PaymentMethodData::BankDebit(bank_debit_data)) => {
+                // Build gateway_info for SEPA direct debit
+                match bank_debit_data {
+                    domain_types::payment_method_data::BankDebitData::SepaBankDebit {
+                        iban,
+                        bank_account_holder_name,
+                    }
+                    | domain_types::payment_method_data::BankDebitData::SepaGuaranteedBankDebit {
+                        iban,
+                        bank_account_holder_name,
+                    } => {
+                        let account_holder = bank_account_holder_name
+                            .clone()
+                            .or_else(|| item.resource_common_data.get_billing_full_name().ok());
+                        Some(GatewayInfo {
+                            card_number: None,
+                            card_expiry_date: None,
+                            card_cvc: None,
+                            card_holder_name: None,
+                            flexible_3d: None,
+                            moto: None,
+                            term_url: None,
+                            account_id: Some(iban.clone()),
+                            account_holder_name: account_holder,
+                        })
+                    }
+                    _ => None,
+                }
             }
             _ => None,
         };
