@@ -82,7 +82,10 @@ pub struct BamboraPaymentsRequest<T: PaymentMethodDataTypes> {
     pub order_number: String,
     pub amount: FloatMajorUnit,
     pub payment_method: PaymentMethodType,
-    pub card: BamboraCard<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<BamboraCard<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_debit: Option<BamboraBankDebit>,
     pub billing: BamboraBillingAddress,
 }
 
@@ -90,6 +93,8 @@ pub struct BamboraPaymentsRequest<T: PaymentMethodDataTypes> {
 #[serde(rename_all = "snake_case")]
 pub enum PaymentMethodType {
     Card,
+    #[serde(rename = "bank_debit")]
+    BankDebit,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +105,25 @@ pub struct BamboraCard<T: PaymentMethodDataTypes> {
     pub expiry_year: Secret<String>,
     pub cvd: Secret<String>,
     pub complete: bool, // true for auto-capture, false for manual capture
+}
+
+/// ACH account type for bank debit payments
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AchAccountType {
+    Checking,
+    Savings,
+}
+
+/// Bambora Bank Debit (ACH) request structure
+#[derive(Debug, Serialize)]
+pub struct BamboraBankDebit {
+    pub account_number: Secret<String>,
+    pub routing_number: Secret<String>,
+    pub account_type: AchAccountType,
+    pub owner_name: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_email: Option<common_utils::pii::Email>,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,60 +272,6 @@ impl<T: PaymentMethodDataTypes>
             PaymentsResponseData,
         >,
     ) -> Result<Self, Self::Error> {
-        // Extract card data
-        let payment_method_data = &item.request.payment_method_data;
-        let card = match payment_method_data {
-            PaymentMethodData::Card(card_data) => {
-                // Get cardholder name - prefer billing full name, fallback to customer name
-                let cardholder_name = item
-                    .resource_common_data
-                    .get_optional_billing_full_name()
-                    .or_else(|| item.request.customer_name.clone().map(Secret::new))
-                    .ok_or(errors::ConnectorError::MissingRequiredField {
-                        field_name: "billing.first_name or customer_name",
-                    })?;
-
-                // Determine if this should be auto-capture or authorization
-                let is_auto_capture = !crate::utils::is_manual_capture(item.request.capture_method);
-
-                // Get 2-digit expiry year using utility function
-                let expiry_year = card_data.get_card_expiry_year_2_digit()?;
-
-                BamboraCard {
-                    name: cardholder_name,
-                    number: card_data.card_number.clone(),
-                    expiry_month: card_data.card_exp_month.clone(),
-                    expiry_year,
-                    cvd: card_data.card_cvc.clone(),
-                    complete: is_auto_capture,
-                }
-            }
-            PaymentMethodData::Wallet(_)
-            | PaymentMethodData::CardRedirect(_)
-            | PaymentMethodData::PayLater(_)
-            | PaymentMethodData::BankRedirect(_)
-            | PaymentMethodData::BankDebit(_)
-            | PaymentMethodData::BankTransfer(_)
-            | PaymentMethodData::Crypto(_)
-            | PaymentMethodData::MandatePayment
-            | PaymentMethodData::Reward
-            | PaymentMethodData::RealTimePayment(_)
-            | PaymentMethodData::Upi(_)
-            | PaymentMethodData::Voucher(_)
-            | PaymentMethodData::GiftCard(_)
-            | PaymentMethodData::CardToken(_)
-            | PaymentMethodData::NetworkToken(_)
-            | PaymentMethodData::MobilePayment(_)
-            | PaymentMethodData::OpenBanking(_)
-            | PaymentMethodData::CardDetailsForNetworkTransactionId(_) => {
-                return Err(errors::ConnectorError::NotSupported {
-                    message: "Selected payment method".to_string(),
-                    connector: "bambora",
-                }
-                .into());
-            }
-        };
-
         // Extract billing address - mandatory field
         let payment_billing = item
             .resource_common_data
@@ -348,16 +318,119 @@ impl<T: PaymentMethodDataTypes>
             .change_context(errors::ConnectorError::AmountConversionFailed)
             .attach_printable("Failed to convert amount from minor to major units")?;
 
-        Ok(Self {
-            order_number: item
-                .resource_common_data
-                .connector_request_reference_id
-                .clone(),
-            amount,
-            payment_method: PaymentMethodType::Card,
-            card,
-            billing,
-        })
+        let payment_method_data = &item.request.payment_method_data;
+
+        match payment_method_data {
+            PaymentMethodData::Card(card_data) => {
+                // Get cardholder name - prefer billing full name, fallback to customer name
+                let cardholder_name = item
+                    .resource_common_data
+                    .get_optional_billing_full_name()
+                    .or_else(|| item.request.customer_name.clone().map(Secret::new))
+                    .ok_or(errors::ConnectorError::MissingRequiredField {
+                        field_name: "billing.first_name or customer_name",
+                    })?;
+
+                // Determine if this should be auto-capture or authorization
+                let is_auto_capture = !crate::utils::is_manual_capture(item.request.capture_method);
+
+                // Get 2-digit expiry year using utility function
+                let expiry_year = card_data.get_card_expiry_year_2_digit()?;
+
+                let card = BamboraCard {
+                    name: cardholder_name,
+                    number: card_data.card_number.clone(),
+                    expiry_month: card_data.card_exp_month.clone(),
+                    expiry_year,
+                    cvd: card_data.card_cvc.clone(),
+                    complete: is_auto_capture,
+                };
+
+                Ok(Self {
+                    order_number: item
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                    amount,
+                    payment_method: PaymentMethodType::Card,
+                    card: Some(card),
+                    bank_debit: None,
+                    billing,
+                })
+            }
+            PaymentMethodData::BankDebit(bank_debit_data) => match bank_debit_data {
+                domain_types::payment_method_data::BankDebitData::AchBankDebit {
+                    account_number,
+                    routing_number,
+                    bank_account_holder_name,
+                    bank_type,
+                    ..
+                } => {
+                    // Get owner name from bank_account_holder_name, fallback to billing name or customer name
+                    let owner_name = bank_account_holder_name
+                        .clone()
+                        .or_else(|| billing.name.clone())
+                        .or_else(|| item.request.customer_name.clone().map(Secret::new))
+                        .ok_or(errors::ConnectorError::MissingRequiredField {
+                            field_name: "bank_account_holder_name or billing name",
+                        })?;
+
+                    // Map bank_type to ACH account type (default to Checking)
+                    let account_type = match bank_type {
+                        Some(common_enums::BankType::Savings) => AchAccountType::Savings,
+                        _ => AchAccountType::Checking,
+                    };
+
+                    let bank_debit = BamboraBankDebit {
+                        account_number: account_number.clone(),
+                        routing_number: routing_number.clone(),
+                        account_type,
+                        owner_name,
+                        owner_email: payment_billing.email.clone(),
+                    };
+
+                    Ok(Self {
+                        order_number: item
+                            .resource_common_data
+                            .connector_request_reference_id
+                            .clone(),
+                        amount,
+                        payment_method: PaymentMethodType::BankDebit,
+                        card: None,
+                        bank_debit: Some(bank_debit),
+                        billing,
+                    })
+                }
+                _ => Err(errors::ConnectorError::NotSupported {
+                    message: "Only ACH Bank Debit is supported".to_string(),
+                    connector: "bambora",
+                }
+                .into()),
+            },
+            PaymentMethodData::Wallet(_)
+            | PaymentMethodData::CardRedirect(_)
+            | PaymentMethodData::PayLater(_)
+            | PaymentMethodData::BankRedirect(_)
+            | PaymentMethodData::BankTransfer(_)
+            | PaymentMethodData::Crypto(_)
+            | PaymentMethodData::MandatePayment
+            | PaymentMethodData::Reward
+            | PaymentMethodData::RealTimePayment(_)
+            | PaymentMethodData::Upi(_)
+            | PaymentMethodData::Voucher(_)
+            | PaymentMethodData::GiftCard(_)
+            | PaymentMethodData::CardToken(_)
+            | PaymentMethodData::NetworkToken(_)
+            | PaymentMethodData::MobilePayment(_)
+            | PaymentMethodData::OpenBanking(_)
+            | PaymentMethodData::CardDetailsForNetworkTransactionId(_) => {
+                Err(errors::ConnectorError::NotSupported {
+                    message: "Selected payment method".to_string(),
+                    connector: "bambora",
+                }
+                .into())
+            }
+        }
     }
 }
 
