@@ -11,7 +11,9 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors,
-    payment_method_data::{Card, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{
+        BankDebitData, Card, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+    },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
@@ -180,6 +182,16 @@ pub enum PaymentMethodType {
     Upi,
     Emi,
     Netbanking,
+    Emandate,
+    Nach,
+}
+
+/// Bank account type for eMandate/NACH payments
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BankAccountType {
+    Savings,
+    Current,
 }
 
 pub struct RazorpayRouterData<T> {
@@ -289,13 +301,11 @@ fn extract_payment_method_and_data<
         | PaymentMethodData::Wallet(_)
         | PaymentMethodData::PayLater(_)
         | PaymentMethodData::BankRedirect(_)
-        | PaymentMethodData::BankDebit(_)
         | PaymentMethodData::BankTransfer(_)
         | PaymentMethodData::Crypto(_)
         | PaymentMethodData::MandatePayment
         | PaymentMethodData::Reward
         | PaymentMethodData::RealTimePayment(_)
-        | PaymentMethodData::Upi(_)
         | PaymentMethodData::Voucher(_)
         | PaymentMethodData::GiftCard(_)
         | PaymentMethodData::CardToken(_)
@@ -303,7 +313,13 @@ fn extract_payment_method_and_data<
         | PaymentMethodData::NetworkToken(_)
         | PaymentMethodData::MobilePayment(_)
         | PaymentMethodData::OpenBanking(_) => Err(errors::ConnectorError::NotImplemented(
-            "Only Card payment method is supported for Razorpay".to_string(),
+            "Only Card and BankDebit payment methods are supported for Razorpay".to_string(),
+        )),
+        PaymentMethodData::BankDebit(_) => Err(errors::ConnectorError::NotImplemented(
+            "BankDebit should be handled separately for eMandate/NACH flow".to_string(),
+        )),
+        PaymentMethodData::Upi(_) => Err(errors::ConnectorError::NotImplemented(
+            "UPI should be handled separately".to_string(),
         )),
     }
 }
@@ -1649,5 +1665,165 @@ pub fn json_value_to_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
         _ => value.to_string(), // For Number, Bool, Null, Object, Array - serialize as JSON
+    }
+}
+
+// ============ BankDebit (eMandate/NACH) Request Types ============
+
+/// Razorpay eMandate/NACH Payment Request
+/// Used for recurring bank debit payments via eMandate or NACH
+#[derive(Debug, Serialize)]
+pub struct RazorpayBankDebitRequest {
+    pub amount: MinorUnit,
+    pub currency: String,
+    pub email: Option<common_utils::pii::Email>,
+    pub contact: Option<Secret<String>>,
+    pub order_id: String,
+    pub method: String,
+    pub bank_account: RazorpayBankAccount,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<HashMap<String, String>>,
+}
+
+/// Razorpay Bank Account Details for eMandate/NACH
+#[derive(Debug, Serialize)]
+pub struct RazorpayBankAccount {
+    pub name: Secret<String>,
+    #[serde(rename = "account_number")]
+    pub account_number: Secret<String>,
+    #[serde(rename = "ifsc")]
+    pub ifsc_code: Secret<String>,
+    #[serde(rename = "account_type")]
+    pub account_type: BankAccountType,
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        &RazorpayRouterData<
+            &RouterDataV2<
+                Authorize,
+                PaymentFlowData,
+                PaymentsAuthorizeData<T>,
+                PaymentsResponseData,
+            >,
+        >,
+    > for RazorpayBankDebitRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: &RazorpayRouterData<
+            &RouterDataV2<
+                Authorize,
+                PaymentFlowData,
+                PaymentsAuthorizeData<T>,
+                PaymentsResponseData,
+            >,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let amount = item.amount;
+        let currency = item.router_data.request.currency.to_string();
+
+        // Get order_id from the CreateOrder response (stored in reference_id)
+        let order_id = item
+            .router_data
+            .resource_common_data
+            .reference_id
+            .as_ref()
+            .ok_or(errors::ConnectorError::MissingRequiredField {
+                field_name: "order_id (reference_id)",
+            })?
+            .clone();
+
+        // Extract billing information for bank account holder name
+        let billing = item
+            .router_data
+            .resource_common_data
+            .address
+            .get_payment_billing();
+
+        let contact = billing
+            .and_then(|billing| billing.phone.as_ref())
+            .and_then(|phone| phone.number.clone())
+            .or_else(|| {
+                item.router_data
+                    .resource_common_data
+                    .get_billing_phone_number()
+                    .ok()
+            });
+
+        let email = item
+            .router_data
+            .resource_common_data
+            .get_billing_email()
+            .ok()
+            .or(item.router_data.request.email.clone());
+
+        // Extract bank debit data
+        let (account_number, routing_number, holder_name, bank_type) =
+            match &item.router_data.request.payment_method_data {
+                PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                    account_number,
+                    routing_number,
+                    bank_account_holder_name,
+                    bank_type,
+                    ..
+                }) => {
+                    let holder = bank_account_holder_name
+                        .clone()
+                        .or_else(|| {
+                            item.router_data
+                                .request
+                                .customer_name
+                                .clone()
+                                .map(Secret::new)
+                        })
+                        .ok_or(errors::ConnectorError::MissingRequiredField {
+                            field_name: "bank_account_holder_name",
+                        })?;
+                    (
+                        account_number.clone(),
+                        routing_number.clone(),
+                        holder,
+                        bank_type.clone(),
+                    )
+                }
+                _ => {
+                    return Err(errors::ConnectorError::NotSupported {
+                        message: "Only ACH Bank Debit is supported for Razorpay eMandate/NACH"
+                            .to_string(),
+                        connector: "Razorpay",
+                    }
+                    .into());
+                }
+            };
+
+        // Map bank_type to Razorpay account_type
+        let account_type = match bank_type {
+            Some(common_enums::BankType::Savings) => BankAccountType::Savings,
+            Some(common_enums::BankType::Checking) => BankAccountType::Current,
+            _ => BankAccountType::Savings, // Default to Savings
+        };
+
+        let bank_account = RazorpayBankAccount {
+            name: holder_name.clone(),
+            account_number,
+            ifsc_code: routing_number,
+            account_type,
+        };
+
+        Ok(Self {
+            amount,
+            currency,
+            email,
+            contact,
+            order_id,
+            method: "emandate".to_string(), // Use emandate method for bank debit
+            bank_account,
+            description: Some("Bank Debit Payment".to_string()),
+            notes: None,
+        })
     }
 }

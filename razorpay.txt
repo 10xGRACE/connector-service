@@ -1,0 +1,13 @@
+https://razorpay.com/docs/payments/recurring-payments/emandate/integrate/
+https://razorpay.com/docs/payments/recurring-payments/emandate/charge-customer-during-registration/
+https://razorpay.com/docs/payments/recurring-payments/emandate/supported-banks/
+https://razorpay.com/docs/payments/recurring-payments/emandate/apis/
+https://razorpay.com/docs/payments/recurring-payments/emandate/errors/
+https://razorpay.com/docs/payments/recurring-payments/paper-nach/integrate/
+https://razorpay.com/docs/api/payments/recurring-payments/emandate/create-authorization-transaction/
+https://razorpay.com/docs/api/payments/recurring-payments/emandate/tokens/
+https://razorpay.com/docs/api/payments/recurring-payments/emandate/create-subsequent-payments/
+https://razorpay.com/docs/api/payments/recurring-payments/paper-nach/create-authorization-transaction/
+https://razorpay.com/docs/api/payments/recurring-payments/paper-nach/tokens/
+https://razorpay.com/docs/api/payments/recurring-payments/paper-nach/create-subsequent-payments/
+https://razorpay.com/docs/api/

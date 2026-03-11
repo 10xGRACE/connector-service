@@ -354,8 +354,12 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         let base_url = &req.resource_common_data.connectors.razorpay.base_url;
 
         // For UPI payments, use the specific UPI endpoint
+        // For BankDebit payments, use the recurring payments endpoint
         match &req.request.payment_method_data {
             PaymentMethodData::Upi(_) => Ok(format!("{base_url}v1/payments/create/upi")),
+            PaymentMethodData::BankDebit(_) => {
+                Ok(format!("{base_url}v1/payments/create/recurring"))
+            }
             _ => Ok(format!("{base_url}v1/payments/create/json")),
         }
     }
@@ -383,6 +387,11 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 Ok(Some(RequestContent::FormUrlEncoded(Box::new(
                     connector_req,
                 ))))
+            }
+            PaymentMethodData::BankDebit(_) => {
+                let connector_req =
+                    razorpay::RazorpayBankDebitRequest::try_from(&connector_router_data)?;
+                Ok(Some(RequestContent::Json(Box::new(connector_req))))
             }
             _ => {
                 let connector_req =
