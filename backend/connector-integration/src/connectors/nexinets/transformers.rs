@@ -10,8 +10,8 @@ use domain_types::{
     },
     errors::ConnectorError,
     payment_method_data::{
-        ApplePayWalletData, BankRedirectData, Card, PaymentMethodData, PaymentMethodDataTypes,
-        RawCardNumber, WalletData,
+        ApplePayWalletData, BankDebitData, BankRedirectData, Card, PaymentMethodData,
+        PaymentMethodDataTypes, RawCardNumber, WalletData,
     },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
@@ -59,6 +59,7 @@ pub enum NexinetsProduct {
     Eps,
     Ideal,
     Applepay,
+    Sepa,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,6 +71,14 @@ pub enum NexinetsPaymentDetails<
     Card(Box<NexiCardDetails<T>>),
     Wallet(Box<NexinetsWalletDetails>),
     BankRedirects(Box<NexinetsBankRedirects>),
+    BankDebit(Box<NexinetsBankDebitDetails>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NexinetsBankDebitDetails {
+    iban: Secret<String>,
+    account_holder: Secret<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -706,9 +715,11 @@ fn get_payment_details_and_product<
                 utils::get_unimplemented_payment_method_error_message("nexinets"),
             ))?,
         },
+        PaymentMethodData::BankDebit(bank_debit_data) => {
+            Ok(get_bank_debit_details(item, bank_debit_data)?)
+        }
         PaymentMethodData::CardRedirect(_)
         | PaymentMethodData::PayLater(_)
-        | PaymentMethodData::BankDebit(_)
         | PaymentMethodData::BankTransfer(_)
         | PaymentMethodData::Crypto(_)
         | PaymentMethodData::MandatePayment
@@ -834,6 +845,44 @@ fn get_wallet_details<
         | WalletData::SwishQr(_)
         | WalletData::Mifinity(_)
         | WalletData::RevolutPay(_) => Err(ConnectorError::NotImplemented(
+            utils::get_unimplemented_payment_method_error_message("nexinets"),
+        ))?,
+    }
+}
+
+fn get_bank_debit_details<
+    T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
+>(
+    item: &RouterDataV2<Authorize, PaymentFlowData, PaymentsAuthorizeData<T>, PaymentsResponseData>,
+    bank_debit_data: &BankDebitData,
+) -> Result<(Option<NexinetsPaymentDetails<T>>, NexinetsProduct), error_stack::Report<ConnectorError>>
+{
+    match bank_debit_data {
+        BankDebitData::SepaBankDebit {
+            iban,
+            bank_account_holder_name,
+        } => {
+            let account_holder = bank_account_holder_name
+                .clone()
+                .or_else(|| item.resource_common_data.get_billing_full_name().ok())
+                .ok_or(ConnectorError::MissingRequiredField {
+                    field_name: "bank_account_holder_name",
+                })?;
+
+            Ok((
+                Some(NexinetsPaymentDetails::BankDebit(Box::new(
+                    NexinetsBankDebitDetails {
+                        iban: iban.clone(),
+                        account_holder,
+                    },
+                ))),
+                NexinetsProduct::Sepa,
+            ))
+        }
+        BankDebitData::AchBankDebit { .. }
+        | BankDebitData::SepaGuaranteedBankDebit { .. }
+        | BankDebitData::BecsBankDebit { .. }
+        | BankDebitData::BacsBankDebit { .. } => Err(ConnectorError::NotImplemented(
             utils::get_unimplemented_payment_method_error_message("nexinets"),
         ))?,
     }
