@@ -44,8 +44,9 @@ use transformers::{
     self as trustpayments, TrustpaymentsAuthorizeRequest, TrustpaymentsAuthorizeResponse,
     TrustpaymentsCaptureRequest, TrustpaymentsCaptureResponse, TrustpaymentsPSyncRequest,
     TrustpaymentsPSyncResponse, TrustpaymentsRSyncRequest, TrustpaymentsRSyncResponse,
-    TrustpaymentsRefundRequest, TrustpaymentsRefundResponse, TrustpaymentsVoidRequest,
-    TrustpaymentsVoidResponse,
+    TrustpaymentsRefundRequest, TrustpaymentsRefundResponse, TrustpaymentsRepeatPaymentRequest,
+    TrustpaymentsRepeatPaymentResponse, TrustpaymentsSetupMandateRequest,
+    TrustpaymentsSetupMandateResponse, TrustpaymentsVoidRequest, TrustpaymentsVoidResponse,
 };
 
 use super::macros;

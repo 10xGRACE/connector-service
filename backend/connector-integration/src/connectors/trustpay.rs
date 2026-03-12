@@ -54,7 +54,8 @@ use transformers::{
     TrustpayAuthUpdateRequest, TrustpayAuthUpdateResponse, TrustpayCreateIntentRequest,
     TrustpayCreateIntentResponse, TrustpayErrorResponse, TrustpayPaymentsRequest,
     TrustpayPaymentsResponse as TrustpayPaymentsSyncResponse, TrustpayPaymentsResponse,
-    TrustpayRefundRequest,
+    TrustpayRefundRequest, TrustpayRepeatPaymentRequest, TrustpayRepeatPaymentResponse,
+    TrustpaySetupMandateRequest, TrustpaySetupMandateResponse,
 };
 
 use super::macros::{self, ContentTypeSelector};
@@ -471,6 +472,18 @@ macros::create_all_prerequisites!(
             flow: RSync,
             response_body: RefundSyncResponse,
             router_data: RouterDataV2<RSync, RefundFlowData, RefundSyncData, RefundsResponseData>,
+        ),
+        (
+            flow: SetupMandate,
+            request_body: TrustpaySetupMandateRequest,
+            response_body: TrustpaySetupMandateResponse,
+            router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: RepeatPayment,
+            request_body: TrustpayRepeatPaymentRequest,
+            response_body: TrustpayRepeatPaymentResponse,
+            router_data: RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
         )
     ],
     amount_converters: [
