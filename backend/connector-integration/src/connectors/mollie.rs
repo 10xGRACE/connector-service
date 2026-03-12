@@ -43,7 +43,9 @@ use serde::Serialize;
 use transformers::{
     self as mollie, MollieCaptureRequest, MollieCaptureResponse, MollieCardTokenRequest,
     MollieCardTokenResponse, MolliePSyncResponse, MolliePaymentsRequest, MolliePaymentsResponse,
-    MollieRSyncResponse, MollieRefundRequest, MollieRefundResponse, MollieVoidResponse,
+    MollieRSyncResponse, MollieRefundRequest, MollieRefundResponse, MollieRepeatPaymentRequest,
+    MollieRepeatPaymentResponse, MollieSetupMandateRequest, MollieSetupMandateResponse,
+    MollieVoidResponse,
 };
 
 use crate::types::ResponseRouterData;
@@ -98,6 +100,18 @@ macros::create_all_prerequisites!(
             request_body: MollieCardTokenRequest<T>,
             response_body: MollieCardTokenResponse,
             router_data: RouterDataV2<PaymentMethodToken, PaymentFlowData, PaymentMethodTokenizationData<T>, PaymentMethodTokenResponse>,
+        ),
+        (
+            flow: SetupMandate,
+            request_body: MollieSetupMandateRequest,
+            response_body: MollieSetupMandateResponse,
+            router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: RepeatPayment,
+            request_body: MollieRepeatPaymentRequest,
+            response_body: MollieRepeatPaymentResponse,
+            router_data: RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
         )
     ],
     amount_converters: [
@@ -502,16 +516,69 @@ macros::macro_connector_implementation!(
     }
 );
 
-// Setup Mandate
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        SetupMandate,
-        PaymentFlowData,
-        SetupMandateRequestData<T>,
-        PaymentsResponseData,
-    > for Mollie<T>
-{
-}
+// Setup Mandate - Creates a first payment with sequenceType: "first" to create a mandate
+// This flow is used for card-based mandates where the customer authenticates the first payment
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_headers, get_content_type, get_error_response_v2],
+    connector: Mollie,
+    curl_request: Json(MollieSetupMandateRequest),
+    curl_response: MollieSetupMandateResponse,
+    flow_name: SetupMandate,
+    resource_common_data: PaymentFlowData,
+    flow_request: SetupMandateRequestData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize ],
+    other_functions: {
+        fn get_url(
+            &self,
+            req: &RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!(
+                "{}/payments",
+                self.base_url(&req.resource_common_data.connectors)
+            ))
+        }
+    }
+);
+
+// Repeat Payment - Creates a recurring payment using an existing mandate
+// Uses sequenceType: "recurring" and requires customerId and mandateId
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_headers, get_content_type, get_error_response_v2],
+    connector: Mollie,
+    curl_request: Json(MollieRepeatPaymentRequest),
+    curl_response: MollieRepeatPaymentResponse,
+    flow_name: RepeatPayment,
+    resource_common_data: PaymentFlowData,
+    flow_request: RepeatPaymentData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize ],
+    other_functions: {
+        fn get_url(
+            &self,
+            req: &RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!(
+                "{}/payments",
+                self.base_url(&req.resource_common_data.connectors)
+            ))
+        }
+    }
+);
 
 // Mandate Revoke
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
@@ -520,17 +587,6 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
         PaymentFlowData,
         MandateRevokeRequestData,
         MandateRevokeResponseData,
-    > for Mollie<T>
-{
-}
-
-// Repeat Payment
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        RepeatPayment,
-        PaymentFlowData,
-        RepeatPaymentData<T>,
-        PaymentsResponseData,
     > for Mollie<T>
 {
 }

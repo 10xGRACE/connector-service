@@ -4,12 +4,15 @@ use common_utils::{
     types::{AmountConvertor, StringMajorUnit, StringMajorUnitForConnector},
 };
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, PaymentMethodToken, RSync, Refund, Void},
+    connector_flow::{
+        Authorize, Capture, PSync, PaymentMethodToken, RSync, Refund, RepeatPayment, SetupMandate,
+        Void,
+    },
     connector_types::{
-        PaymentFlowData, PaymentMethodTokenResponse, PaymentMethodTokenizationData,
-        PaymentVoidData, PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData,
-        PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData,
-        ResponseId,
+        MandateReferenceId, PaymentFlowData, PaymentMethodTokenResponse,
+        PaymentMethodTokenizationData, PaymentVoidData, PaymentsAuthorizeData, PaymentsCaptureData,
+        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
+        RefundsResponseData, RepeatPaymentData, ResponseId, SetupMandateRequestData,
     },
     errors,
     payment_method_data::{
@@ -870,3 +873,344 @@ pub type MollieCaptureResponse = MolliePaymentsResponse;
 pub type MolliePSyncResponse = MolliePaymentsResponse;
 pub type MollieVoidResponse = MolliePaymentsResponse;
 pub type MollieRSyncResponse = MollieRefundResponse;
+pub type MollieSetupMandateResponse = MolliePaymentsResponse;
+pub type MollieRepeatPaymentResponse = MolliePaymentsResponse;
+
+// ===== SETUP MANDATE FLOW TYPES AND TRANSFORMERS =====
+
+// Mollie Setup Mandate Request structure
+// Creates a first payment with sequenceType: "first" to establish a mandate
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MollieSetupMandateRequest {
+    pub amount: MollieAmount,
+    pub description: String,
+    pub redirect_url: String,
+    pub webhook_url: String,
+    pub metadata: serde_json::Value,
+    #[serde(flatten)]
+    pub payment_method_data: MolliePaymentMethodData,
+    pub sequence_type: SequenceType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        MollieRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for MollieSetupMandateRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: MollieRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let item = item.router_data;
+        // Convert amount to string major unit format
+        let converter = StringMajorUnitForConnector;
+        let minor_amount =
+            item.request
+                .minor_amount
+                .ok_or(errors::ConnectorError::MissingRequiredField {
+                    field_name: "amount",
+                })?;
+        let amount_value = converter
+            .convert(minor_amount, item.request.currency)
+            .change_context(errors::ConnectorError::RequestEncodingFailed)
+            .attach_printable("Failed to convert amount to string major unit")?;
+
+        // Extract payment method data - only card and bank debit are supported for mandates
+        let payment_method_data = match &item.request.payment_method_data {
+            PaymentMethodData::Card(_card_data) => {
+                let card_token = item.resource_common_data.payment_method_token.as_ref().map(
+                    |token| match token {
+                        domain_types::router_data::PaymentMethodToken::Token(t) => t.clone(),
+                    },
+                );
+
+                let billing_address = item
+                    .resource_common_data
+                    .address
+                    .get_payment_method_billing()
+                    .and_then(|billing| {
+                        let address = billing.address.as_ref()?;
+                        let line1 = address.line1.as_ref()?.peek().to_string();
+                        let street_and_number = match address.line2.as_ref() {
+                            Some(line2) => format!("{}, {}", line1, line2.peek()),
+                            None => line1,
+                        };
+
+                        Some(MollieAddress {
+                            street_and_number: Secret::new(street_and_number),
+                            postal_code: Secret::new(address.zip.as_ref()?.peek().to_string()),
+                            city: address.city.as_ref()?.peek().to_string(),
+                            region: None,
+                            country: address.country?,
+                        })
+                    });
+
+                MolliePaymentMethodData::CreditCard(Box::new(CreditCardMethodData {
+                    card_token,
+                    billing_address,
+                    shipping_address: None,
+                }))
+            }
+            PaymentMethodData::BankDebit(BankDebitData::SepaBankDebit {
+                iban,
+                bank_account_holder_name,
+            })
+            | PaymentMethodData::BankDebit(BankDebitData::SepaGuaranteedBankDebit {
+                iban,
+                bank_account_holder_name,
+            }) => {
+                let consumer_name = bank_account_holder_name
+                    .as_ref()
+                    .map(|name| Secret::new(name.peek().to_string()))
+                    .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                        field_name: "bank_account_holder_name",
+                    })?;
+
+                MolliePaymentMethodData::DirectDebit(Box::new(DirectDebitMethodData {
+                    consumer_name,
+                    consumer_account: Secret::new(iban.peek().to_string()),
+                    consumer_bic: None,
+                }))
+            }
+            _ => {
+                return Err(errors::ConnectorError::NotSupported {
+                    message: "Payment method for mandate setup".to_string(),
+                    connector: "mollie",
+                }
+                .into());
+            }
+        };
+
+        // Build metadata
+        let mut metadata_map = serde_json::Map::new();
+        metadata_map.insert(
+            "orderId".to_string(),
+            serde_json::Value::String(
+                item.resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            ),
+        );
+
+        Ok(Self {
+            amount: MollieAmount {
+                currency: item.request.currency,
+                value: amount_value,
+            },
+            description: item.resource_common_data.description.clone().ok_or(
+                errors::ConnectorError::MissingRequiredField {
+                    field_name: "description",
+                },
+            )?,
+            redirect_url: item.request.router_return_url.clone().unwrap_or_default(),
+            webhook_url: "".to_string(),
+            metadata: serde_json::Value::Object(metadata_map),
+            payment_method_data,
+            sequence_type: SequenceType::First,
+            customer_id: None, // Can be populated if customer exists
+            locale: None,
+        })
+    }
+}
+
+// Response transformer for Setup Mandate - reuses MolliePaymentsResponse
+impl<T: PaymentMethodDataTypes> TryFrom<ResponseRouterData<MolliePaymentsResponse, Self>>
+    for RouterDataV2<
+        SetupMandate,
+        PaymentFlowData,
+        SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<MolliePaymentsResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Map status from Mollie response
+        let status = item.response.status.to_attempt_status();
+
+        // Extract redirection URL if available
+        let redirection_data = item.response.links.checkout.as_ref().and_then(|checkout| {
+            url::Url::parse(&checkout.href).ok().map(|url| {
+                Box::new(RedirectForm::from((
+                    url,
+                    common_utils::request::Method::Get,
+                )))
+            })
+        });
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id.clone()),
+                redirection_data,
+                mandate_reference: None, // Mandate is created after customer completes payment
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: Some(item.response.id),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+// ===== REPEAT PAYMENT FLOW TYPES AND TRANSFORMERS =====
+
+// Mollie Repeat Payment Request structure
+// Creates a recurring payment with sequenceType: "recurring" using an existing mandate
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MollieRepeatPaymentRequest {
+    pub amount: MollieAmount,
+    pub description: String,
+    pub metadata: serde_json::Value,
+    pub sequence_type: SequenceType,
+    pub customer_id: String,
+    pub mandate_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        MollieRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for MollieRepeatPaymentRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: MollieRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let item = item.router_data;
+        // Convert amount to string major unit format
+        let converter = StringMajorUnitForConnector;
+        let amount_value = converter
+            .convert(item.request.minor_amount, item.request.currency)
+            .change_context(errors::ConnectorError::RequestEncodingFailed)
+            .attach_printable("Failed to convert amount to string major unit")?;
+
+        // Get customer_id from resource_common_data
+        let customer_id = item.resource_common_data.get_connector_customer_id()?;
+
+        // Get mandate_id from mandate_reference
+        let mandate_id = match &item.request.mandate_reference {
+            MandateReferenceId::ConnectorMandateId(connector_mandate_ref) => connector_mandate_ref
+                .get_connector_mandate_id()
+                .ok_or(errors::ConnectorError::MissingRequiredField {
+                    field_name: "connector_mandate_id",
+                })?,
+            _ => {
+                return Err(errors::ConnectorError::NotSupported {
+                    message: "Network mandate ID not supported for repeat payments".to_string(),
+                    connector: "mollie",
+                }
+                .into());
+            }
+        };
+
+        // Build metadata
+        let mut metadata_map = serde_json::Map::new();
+        metadata_map.insert(
+            "orderId".to_string(),
+            serde_json::Value::String(
+                item.resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            ),
+        );
+
+        Ok(Self {
+            amount: MollieAmount {
+                currency: item.request.currency,
+                value: amount_value,
+            },
+            description: item.resource_common_data.description.clone().ok_or(
+                errors::ConnectorError::MissingRequiredField {
+                    field_name: "description",
+                },
+            )?,
+            metadata: serde_json::Value::Object(metadata_map),
+            sequence_type: SequenceType::Recurring,
+            customer_id,
+            mandate_id,
+            webhook_url: None,
+        })
+    }
+}
+
+// Response transformer for Repeat Payment - reuses MolliePaymentsResponse
+impl<T: PaymentMethodDataTypes> TryFrom<ResponseRouterData<MolliePaymentsResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<MolliePaymentsResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Map status from Mollie response
+        let status = item.response.status.to_attempt_status();
+
+        // Recurring payments are processed server-to-server, no redirect needed
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id.clone()),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: Some(item.response.id),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}

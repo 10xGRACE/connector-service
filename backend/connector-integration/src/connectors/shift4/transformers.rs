@@ -2,11 +2,11 @@ use crate::types::ResponseRouterData;
 use common_enums::{AttemptStatus, Currency, RefundStatus};
 use common_utils::{pii, request::Method, types::MinorUnit};
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, RSync, Refund},
+    connector_flow::{Authorize, Capture, PSync, RSync, Refund, RepeatPayment, SetupMandate},
     connector_types::{
-        PaymentFlowData, PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData,
-        PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData,
-        ResponseId,
+        MandateReferenceId, PaymentFlowData, PaymentsAuthorizeData, PaymentsCaptureData,
+        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
+        RefundsResponseData, RepeatPaymentData, ResponseId, SetupMandateRequestData,
     },
     errors,
     payment_method_data::{
@@ -723,5 +723,300 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
     ) -> Result<Self, Self::Error> {
         // Delegate to the existing TryFrom<&RouterDataV2> implementation
         Self::try_from(&item.router_data)
+    }
+}
+
+// ===== MIT (Merchant Initiated Transaction) FLOW STRUCTURES =====
+// SetupMandate: Initial CIT (Customer Initiated Transaction) that stores credentials
+// RepeatPayment: Subsequent MIT using stored credentials
+
+// SetupMandate Request - Initial transaction to store credentials for future MIT
+// Uses POST /charges with type=first_recurring
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shift4SetupMandateRequest<T: PaymentMethodDataTypes> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<MinorUnit>,
+    pub currency: Currency,
+    #[serde(rename = "type")]
+    pub charge_type: String, // "first_recurring"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub payment_method: Shift4PaymentMethod<T>,
+}
+
+// SetupMandate Response - Same structure as regular charge response
+pub type Shift4SetupMandateResponse = Shift4PaymentsResponse;
+
+// RepeatPayment Request - Subsequent MIT using stored card token
+// Uses POST /charges with type=merchant_initiated and card token from previous transaction
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shift4RepeatPaymentRequest {
+    pub amount: MinorUnit,
+    pub currency: Currency,
+    #[serde(rename = "type")]
+    pub charge_type: String, // "merchant_initiated"
+    pub card: String, // Card token from previous transaction
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+// RepeatPayment Response - Same structure as regular charge response
+pub type Shift4RepeatPaymentResponse = Shift4PaymentsResponse;
+
+// ===== SETUP MANDATE (Initial CIT) REQUEST TRANSFORMATION =====
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        Shift4RouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for Shift4SetupMandateRequest<T>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: Shift4RouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+
+        // Extract card details for SetupMandate (card required)
+        let payment_method = match &router_data.request.payment_method_data {
+            PaymentMethodData::Card(card_data) => {
+                // Get cardholder name from address/billing info if available
+                let cardholder_name = router_data
+                    .resource_common_data
+                    .address
+                    .get_payment_method_billing()
+                    .and_then(|billing| billing.get_optional_full_name())
+                    .or_else(|| {
+                        router_data
+                            .request
+                            .customer_name
+                            .as_ref()
+                            .map(|name| Secret::new(name.clone()))
+                    })
+                    .ok_or_else(|| {
+                        error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                            field_name: "cardholder_name"
+                        })
+                    })?;
+
+                Shift4PaymentMethod::Card(Shift4CardPayment {
+                    card: Shift4CardData {
+                        number: card_data.card_number.clone(),
+                        exp_month: card_data.card_exp_month.clone(),
+                        exp_year: card_data.card_exp_year.clone(),
+                        cardholder_name,
+                    },
+                })
+            }
+            _ => {
+                return Err(error_stack::report!(errors::ConnectorError::NotSupported {
+                    message: "SetupMandate only supports card payments".to_string(),
+                    connector: "Shift4",
+                }))
+            }
+        };
+
+        Ok(Self {
+            amount: router_data.request.minor_amount,
+            currency: router_data.request.currency,
+            charge_type: "first_recurring".to_string(),
+            description: router_data.resource_common_data.description.clone(),
+            metadata: router_data.request.metadata.clone().expose_option(),
+            payment_method,
+        })
+    }
+}
+
+// SetupMandate Response Transformation - reuses Shift4PaymentsResponse
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<Shift4SetupMandateResponse, Self>>
+    for RouterDataV2<
+        SetupMandate,
+        PaymentFlowData,
+        SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<Shift4SetupMandateResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Use same status mapping as Authorize
+        let status = match item.response.status {
+            Shift4PaymentStatus::Successful => {
+                if item.response.captured {
+                    AttemptStatus::Charged
+                } else {
+                    AttemptStatus::Authorized
+                }
+            }
+            Shift4PaymentStatus::Failed => AttemptStatus::Failure,
+            Shift4PaymentStatus::Pending => {
+                match item
+                    .response
+                    .flow
+                    .as_ref()
+                    .and_then(|flow| flow.next_action.as_ref())
+                {
+                    Some(NextAction::Redirect) => AttemptStatus::AuthenticationPending,
+                    Some(NextAction::Wait) | Some(NextAction::None) | None => {
+                        AttemptStatus::Pending
+                    }
+                }
+            }
+        };
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id.clone()),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: Some(item.response.id),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+// ===== REPEAT PAYMENT (Subsequent MIT) REQUEST TRANSFORMATION =====
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        Shift4RouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for Shift4RepeatPaymentRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: Shift4RouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+
+        // Get card token from mandate reference using MandateReferenceId methods
+        let card_token = match &router_data.request.mandate_reference {
+            MandateReferenceId::ConnectorMandateId(connector_mandate) => connector_mandate
+                .get_connector_mandate_id()
+                .ok_or_else(|| {
+                    error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                        field_name: "connector_mandate_id"
+                    })
+                })?,
+            _ => {
+                return Err(error_stack::report!(errors::ConnectorError::NotSupported {
+                    message: "Only connector mandate ID is supported for Shift4 MIT".to_string(),
+                    connector: "Shift4",
+                }))
+            }
+        };
+
+        Ok(Self {
+            amount: router_data.request.minor_amount,
+            currency: router_data.request.currency,
+            charge_type: "merchant_initiated".to_string(),
+            card: card_token,
+            description: router_data.resource_common_data.description.clone(),
+            metadata: router_data.request.metadata.clone().expose_option(),
+        })
+    }
+}
+
+// RepeatPayment Response Transformation - reuses Shift4PaymentsResponse
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<Shift4RepeatPaymentResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<Shift4RepeatPaymentResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Use same status mapping as Authorize
+        let status = match item.response.status {
+            Shift4PaymentStatus::Successful => {
+                if item.response.captured {
+                    AttemptStatus::Charged
+                } else {
+                    AttemptStatus::Authorized
+                }
+            }
+            Shift4PaymentStatus::Failed => AttemptStatus::Failure,
+            Shift4PaymentStatus::Pending => {
+                match item
+                    .response
+                    .flow
+                    .as_ref()
+                    .and_then(|flow| flow.next_action.as_ref())
+                {
+                    Some(NextAction::Redirect) => AttemptStatus::AuthenticationPending,
+                    Some(NextAction::Wait) | Some(NextAction::None) | None => {
+                        AttemptStatus::Pending
+                    }
+                }
+            }
+        };
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id.clone()),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: Some(item.response.id),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
     }
 }
