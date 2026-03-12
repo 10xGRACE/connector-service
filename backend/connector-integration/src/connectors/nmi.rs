@@ -39,8 +39,9 @@ use interfaces::{
 };
 use serde::Serialize;
 use transformers::{
-    NmiCaptureRequest, NmiPaymentsRequest, NmiRefundRequest, NmiRefundSyncRequest, NmiSyncRequest,
-    NmiVoidRequest, StandardResponse, SyncResponse,
+    NmiCaptureRequest, NmiPaymentsRequest, NmiRefundRequest, NmiRefundSyncRequest,
+    NmiRepeatPaymentRequest, NmiSetupMandateRequest, NmiSyncRequest, NmiVoidRequest,
+    StandardResponse, SyncResponse,
 };
 
 // Type aliases to avoid duplicate templating in macros
@@ -49,6 +50,8 @@ pub type NmiVoidResponse = StandardResponse;
 pub type NmiRefundResponse = StandardResponse;
 pub type NmiPSyncResponse = SyncResponse;
 pub type NmiRSyncResponse = SyncResponse;
+pub type NmiSetupMandateResponse = StandardResponse;
+pub type NmiRepeatPaymentResponse = StandardResponse;
 
 use super::macros;
 use crate::types::ResponseRouterData;
@@ -232,6 +235,18 @@ macros::create_all_prerequisites!(
             request_body: NmiRefundSyncRequest,
             response_body: NmiRSyncResponse,
             router_data: RouterDataV2<RSync, RefundFlowData, RefundSyncData, RefundsResponseData>,
+        ),
+        (
+            flow: SetupMandate,
+            request_body: NmiSetupMandateRequest,
+            response_body: NmiSetupMandateResponse,
+            router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: RepeatPayment,
+            request_body: NmiRepeatPaymentRequest,
+            response_body: NmiRepeatPaymentResponse,
+            router_data: RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
         )
     ],
     amount_converters: [
@@ -536,32 +551,78 @@ macros::macro_connector_implementation!(
     }
 );
 
+// Setup Mandate - Initial CIT (Customer Initiated Transaction)
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Nmi,
+    curl_request: FormUrlEncoded(NmiSetupMandateRequest<T>),
+    curl_response: NmiSetupMandateResponse,
+    flow_name: SetupMandate,
+    resource_common_data: PaymentFlowData,
+    flow_request: SetupMandateRequestData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    preprocess_response: true,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            _req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            Ok(vec![(
+                headers::CONTENT_TYPE.to_string(),
+                "application/x-www-form-urlencoded".to_string().into(),
+            )])
+        }
+        fn get_url(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!("{}{}", self.connector_base_url_payments(req), endpoints::TRANSACT))
+        }
+    }
+);
+
+// Repeat Payment - MIT (Merchant Initiated Transaction)
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Nmi,
+    curl_request: FormUrlEncoded(NmiRepeatPaymentRequest),
+    curl_response: NmiRepeatPaymentResponse,
+    flow_name: RepeatPayment,
+    resource_common_data: PaymentFlowData,
+    flow_request: RepeatPaymentData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    preprocess_response: true,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            _req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            Ok(vec![(
+                headers::CONTENT_TYPE.to_string(),
+                "application/x-www-form-urlencoded".to_string().into(),
+            )])
+        }
+        fn get_url(
+            &self,
+            req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!("{}{}", self.connector_base_url_payments(req), endpoints::TRANSACT))
+        }
+    }
+);
+
 // ===== EMPTY CONNECTOR INTEGRATIONS =====
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     ConnectorIntegrationV2<
         VoidPC,
         PaymentFlowData,
         PaymentsCancelPostCaptureData,
-        PaymentsResponseData,
-    > for Nmi<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        SetupMandate,
-        PaymentFlowData,
-        SetupMandateRequestData<T>,
-        PaymentsResponseData,
-    > for Nmi<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        RepeatPayment,
-        PaymentFlowData,
-        RepeatPaymentData<T>,
         PaymentsResponseData,
     > for Nmi<T>
 {

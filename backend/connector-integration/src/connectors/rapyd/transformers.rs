@@ -1,9 +1,10 @@
 use common_utils::{ext_traits::OptionExt, request::Method, FloatMajorUnit, StringMajorUnit};
 use domain_types::{
-    connector_flow::{Authorize, Capture},
+    connector_flow::{Authorize, Capture, RepeatPayment, SetupMandate},
     connector_types::{
-        PaymentFlowData, PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData,
-        RefundFlowData, RefundsData, RefundsResponseData, ResponseId,
+        MandateReferenceId, PaymentFlowData, PaymentsAuthorizeData, PaymentsCaptureData,
+        PaymentsResponseData, RefundFlowData, RefundsData, RefundsResponseData, RepeatPaymentData,
+        ResponseId, SetupMandateRequestData,
     },
     errors::ConnectorError,
     payment_method_data::{
@@ -465,6 +466,8 @@ pub struct ResponseData {
     pub paid: Option<bool>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
+    // Payment method ID returned when save_payment_method=true (for SetupMandate flow)
+    pub payment_method: Option<String>,
 }
 
 // Capture Request
@@ -598,6 +601,394 @@ impl<F, T> TryFrom<ResponseRouterData<RefundResponse, Self>>
                 refund_status,
                 status_code: item.http_code,
             }),
+            ..item.router_data
+        })
+    }
+}
+
+// ============== SETUP MANDATE (MIT - Customer Initiated Transaction) ==============
+// SetupMandate: First transaction to save payment method for future use
+// Uses POST /v1/payments with save_payment_method=true and initiation_type="customer"
+
+/// Response type for SetupMandate - reuses RapydPaymentsResponse
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RapydSetupMandateResponse(pub RapydPaymentsResponse);
+
+#[derive(Default, Debug, Serialize)]
+pub struct RapydSetupMandateRequest<
+    T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize,
+> {
+    pub amount: StringMajorUnit,
+    pub currency: common_enums::Currency,
+    pub payment_method: PaymentMethod<T>,
+    pub payment_method_options: Option<PaymentMethodOptions>,
+    pub merchant_reference_id: Option<String>,
+    pub capture: Option<bool>,
+    pub description: Option<String>,
+    pub complete_payment_url: Option<String>,
+    pub error_payment_url: Option<String>,
+    pub save_payment_method: bool,
+    pub initiation_type: String,
+}
+
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        RapydRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for RapydSetupMandateRequest<T>
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: RapydRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let payment_method = match item.router_data.request.payment_method_data {
+            PaymentMethodData::Card(ref ccard) => Some(PaymentMethod {
+                pm_type: "in_amex_card".to_owned(),
+                fields: Some(PaymentFields {
+                    number: ccard.card_number.to_owned(),
+                    expiration_month: ccard.card_exp_month.to_owned(),
+                    expiration_year: ccard.card_exp_year.to_owned(),
+                    name: item
+                        .router_data
+                        .resource_common_data
+                        .get_optional_billing_full_name()
+                        .to_owned()
+                        .unwrap_or(Secret::new("".to_string())),
+                    cvv: ccard.card_cvc.to_owned(),
+                }),
+                address: None,
+                digital_wallet: None,
+                ach: None,
+            }),
+            _ => None,
+        }
+        .get_required_value("payment_method not implemented")
+        .change_context(ConnectorError::NotImplemented("payment_method".to_owned()))?;
+
+        let return_url = item.router_data.request.get_router_return_url()?;
+        let amount = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data
+                    .request
+                    .minor_amount
+                    .unwrap_or(common_utils::types::MinorUnit::new(0)),
+                item.router_data.request.currency,
+            )
+            .change_context(ConnectorError::RequestEncodingFailed)?;
+
+        Ok(Self {
+            amount,
+            currency: item.router_data.request.currency,
+            payment_method,
+            capture: Some(true),
+            payment_method_options: None,
+            merchant_reference_id: Some(
+                item.router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            ),
+            description: Some("Setup mandate".to_string()),
+            error_payment_url: Some(return_url.clone()),
+            complete_payment_url: Some(return_url),
+            save_payment_method: true,
+            initiation_type: "customer".to_string(),
+        })
+    }
+}
+
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<RapydSetupMandateResponse, Self>>
+    for RouterDataV2<
+        SetupMandate,
+        PaymentFlowData,
+        SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: ResponseRouterData<RapydSetupMandateResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Unwrap the inner RapydPaymentsResponse from the wrapper
+        let inner_response = &item.response.0;
+        let (status, response) = match &inner_response.data {
+            Some(data) => {
+                let attempt_status =
+                    get_status(data.status.to_owned(), data.next_action.to_owned());
+                match attempt_status {
+                    common_enums::AttemptStatus::Failure => (
+                        common_enums::AttemptStatus::Failure,
+                        Err(ErrorResponse {
+                            code: data
+                                .failure_code
+                                .to_owned()
+                                .unwrap_or(inner_response.status.error_code.clone()),
+                            status_code: item.http_code,
+                            message: inner_response.status.status.clone().unwrap_or_default(),
+                            reason: data.failure_message.to_owned(),
+                            attempt_status: None,
+                            connector_transaction_id: None,
+                            network_advice_code: None,
+                            network_decline_code: None,
+                            network_error_message: None,
+                        }),
+                    ),
+                    _ => {
+                        let redirection_url = data
+                            .redirect_url
+                            .as_ref()
+                            .filter(|redirect_str| !redirect_str.is_empty())
+                            .map(|url| {
+                                Url::parse(url)
+                                    .change_context(ConnectorError::FailedToObtainIntegrationUrl)
+                            })
+                            .transpose()?;
+
+                        let redirection_data =
+                            redirection_url.map(|url| RedirectForm::from((url, Method::Get)));
+
+                        (
+                            attempt_status,
+                            Ok(PaymentsResponseData::TransactionResponse {
+                                resource_id: ResponseId::ConnectorTransactionId(data.id.to_owned()),
+                                redirection_data: redirection_data.map(Box::new),
+                                mandate_reference: data.payment_method.to_owned().map(|pm_id| {
+                                    Box::new(domain_types::connector_types::MandateReference {
+                                        connector_mandate_id: Some(pm_id),
+                                        payment_method_id: None,
+                                        connector_mandate_request_reference_id: None,
+                                    })
+                                }),
+                                connector_metadata: None,
+                                network_txn_id: None,
+                                connector_response_reference_id: data
+                                    .merchant_reference_id
+                                    .to_owned(),
+                                incremental_authorization_allowed: None,
+                                status_code: item.http_code,
+                            }),
+                        )
+                    }
+                }
+            }
+            None => (
+                common_enums::AttemptStatus::Failure,
+                Err(ErrorResponse {
+                    code: inner_response.status.error_code.clone(),
+                    status_code: item.http_code,
+                    message: inner_response.status.status.clone().unwrap_or_default(),
+                    reason: inner_response.status.message.clone(),
+                    attempt_status: None,
+                    connector_transaction_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                }),
+            ),
+        };
+
+        Ok(Self {
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            response,
+            ..item.router_data
+        })
+    }
+}
+
+// ============== REPEAT PAYMENT (MIT - Merchant Initiated Transaction) ==============
+// RepeatPayment: Subsequent transaction using stored payment method
+// Uses POST /v1/payments with stored payment_method ID and initiation_type="merchant"
+
+/// Response type for RepeatPayment - reuses RapydPaymentsResponse
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RapydRepeatPaymentResponse(pub RapydPaymentsResponse);
+
+#[derive(Default, Debug, Serialize)]
+pub struct RapydRepeatPaymentRequest {
+    pub amount: StringMajorUnit,
+    pub currency: common_enums::Currency,
+    pub payment_method: String,
+    pub merchant_reference_id: Option<String>,
+    pub capture: Option<bool>,
+    pub description: Option<String>,
+    pub initiation_type: String,
+}
+
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        RapydRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for RapydRepeatPaymentRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: RapydRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let amount = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data.request.minor_amount,
+                item.router_data.request.currency,
+            )
+            .change_context(ConnectorError::RequestEncodingFailed)?;
+
+        // Get the stored payment method ID from mandate_reference
+        let payment_method_id = match &item.router_data.request.mandate_reference {
+            MandateReferenceId::ConnectorMandateId(connector_mandate_ref) => connector_mandate_ref
+                .get_connector_mandate_id()
+                .ok_or_else(|| {
+                    error_stack::report!(ConnectorError::MissingRequiredField {
+                        field_name: "connector_mandate_id",
+                    })
+                })?,
+            _ => {
+                return Err(error_stack::report!(ConnectorError::NotSupported {
+                    message: "Network mandate ID not supported".to_string(),
+                    connector: "rapyd",
+                }))
+            }
+        };
+
+        Ok(Self {
+            amount,
+            currency: item.router_data.request.currency,
+            payment_method: payment_method_id,
+            capture: Some(true),
+            merchant_reference_id: Some(
+                item.router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+                    .clone(),
+            ),
+            description: Some("Repeat payment".to_string()),
+            initiation_type: "merchant".to_string(),
+        })
+    }
+}
+
+impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<RapydRepeatPaymentResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: ResponseRouterData<RapydRepeatPaymentResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        // Unwrap the inner RapydPaymentsResponse from the wrapper
+        let inner_response = &item.response.0;
+        let (status, response) = match &inner_response.data {
+            Some(data) => {
+                let attempt_status =
+                    get_status(data.status.to_owned(), data.next_action.to_owned());
+                match attempt_status {
+                    common_enums::AttemptStatus::Failure => (
+                        common_enums::AttemptStatus::Failure,
+                        Err(ErrorResponse {
+                            code: data
+                                .failure_code
+                                .to_owned()
+                                .unwrap_or(inner_response.status.error_code.clone()),
+                            status_code: item.http_code,
+                            message: inner_response.status.status.clone().unwrap_or_default(),
+                            reason: data.failure_message.to_owned(),
+                            attempt_status: None,
+                            connector_transaction_id: None,
+                            network_advice_code: None,
+                            network_decline_code: None,
+                            network_error_message: None,
+                        }),
+                    ),
+                    _ => {
+                        let redirection_url = data
+                            .redirect_url
+                            .as_ref()
+                            .filter(|redirect_str| !redirect_str.is_empty())
+                            .map(|url| {
+                                Url::parse(url)
+                                    .change_context(ConnectorError::FailedToObtainIntegrationUrl)
+                            })
+                            .transpose()?;
+
+                        let redirection_data =
+                            redirection_url.map(|url| RedirectForm::from((url, Method::Get)));
+
+                        (
+                            attempt_status,
+                            Ok(PaymentsResponseData::TransactionResponse {
+                                resource_id: ResponseId::ConnectorTransactionId(data.id.to_owned()),
+                                redirection_data: redirection_data.map(Box::new),
+                                mandate_reference: None,
+                                connector_metadata: None,
+                                network_txn_id: None,
+                                connector_response_reference_id: data
+                                    .merchant_reference_id
+                                    .to_owned(),
+                                incremental_authorization_allowed: None,
+                                status_code: item.http_code,
+                            }),
+                        )
+                    }
+                }
+            }
+            None => (
+                common_enums::AttemptStatus::Failure,
+                Err(ErrorResponse {
+                    code: inner_response.status.error_code.clone(),
+                    status_code: item.http_code,
+                    message: inner_response.status.status.clone().unwrap_or_default(),
+                    reason: inner_response.status.message.clone(),
+                    attempt_status: None,
+                    connector_transaction_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                }),
+            ),
+        };
+
+        Ok(Self {
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            response,
             ..item.router_data
         })
     }

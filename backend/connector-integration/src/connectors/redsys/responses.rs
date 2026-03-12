@@ -11,6 +11,8 @@ pub type RedsysAuthorizeResponse = RedsysResponse;
 pub type RedsysCaptureResponse = RedsysResponse;
 pub type RedsysVoidResponse = RedsysResponse;
 pub type RedsysRefundResponse = RedsysResponse;
+pub type RedsysSetupMandateResponse = RedsysResponse;
+pub type RedsysRepeatPaymentResponse = RedsysResponse;
 
 /// Main response enum that handles both success and error responses
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,6 +37,16 @@ pub struct RedsysPaymentsResponse {
     pub ds_response: Option<DsResponse>,
     #[serde(rename = "Ds_Response_Description")]
     pub ds_response_description: Option<String>,
+    #[serde(rename = "Ds_Merchant_Identifier")]
+    pub ds_merchant_identifier: Option<String>,
+    #[serde(rename = "Ds_Merchant_Cof_Txnid")]
+    pub ds_merchant_cof_txnid: Option<String>,
+    #[serde(rename = "Ds_ExpiryDate")]
+    pub ds_expiry_date: Option<String>,
+    #[serde(rename = "Ds_Card_Number")]
+    pub ds_card_number: Option<String>,
+    #[serde(rename = "Ds_Card_Last4")]
+    pub ds_card_last4: Option<String>,
 }
 
 /// PSD2 compliance indicator

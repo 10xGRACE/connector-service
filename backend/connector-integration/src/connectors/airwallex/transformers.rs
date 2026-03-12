@@ -5,11 +5,11 @@ use common_utils::{
     types::{FloatMajorUnit, StringMajorUnit},
 };
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, RSync, Refund, Void},
+    connector_flow::{Authorize, Capture, PSync, RSync, Refund, RepeatPayment, SetupMandate, Void},
     connector_types::{
         PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData, PaymentsCaptureData,
         PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
-        RefundsResponseData, ResponseId,
+        RefundsResponseData, RepeatPaymentData, ResponseId, SetupMandateRequestData,
     },
     errors,
     payment_method_data::PaymentMethodDataTypes,
@@ -1508,5 +1508,432 @@ impl TryFrom<ResponseRouterData<AirwallexAccessTokenResponse, Self>>
         });
 
         Ok(router_data)
+    }
+}
+
+// ===== SETUP MANDATE FLOW TYPES =====
+// SetupMandate: Creates a payment consent for stored credentials
+
+#[derive(Debug, Serialize)]
+pub struct AirwallexSetupMandateRequest {
+    pub request_id: String,
+    pub amount: StringMajorUnit,
+    pub currency: Currency,
+    pub merchant_order_id: String,
+    pub customer_id: Option<String>,
+    pub payment_method: AirwallexPaymentMethod,
+    pub payment_method_options: Option<AirwallexPaymentOptions>,
+    pub return_url: Option<String>,
+    pub device_data: Option<AirwallexDeviceData>,
+}
+
+// Type alias - reuse the same response structure for SetupMandate
+pub type AirwallexSetupMandateResponse = AirwallexPaymentsResponse;
+
+// Request transformer for SetupMandate flow
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        super::AirwallexRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for AirwallexSetupMandateRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: super::AirwallexRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        // Extract payment method data
+        let payment_method = match item.router_data.request.payment_method_data.clone() {
+            domain_types::payment_method_data::PaymentMethodData::Card(card_data) => {
+                AirwallexPaymentMethod::Card(AirwallexCardData {
+                    card: AirwallexCardDetails {
+                        number: Secret::new(card_data.card_number.peek().to_string()),
+                        expiry_month: card_data.card_exp_month.clone(),
+                        expiry_year: card_data.get_expiry_year_4_digit(),
+                        cvc: card_data.card_cvc.clone(),
+                        name: card_data
+                            .card_holder_name
+                            .map(|name| Secret::new(name.expose())),
+                    },
+                    payment_method_type: AirwallexPaymentType::Card,
+                })
+            }
+            _ => {
+                return Err(errors::ConnectorError::NotSupported {
+                    message: "Only card payments are supported for SetupMandate".to_string(),
+                    connector: "Airwallex",
+                }
+                .into())
+            }
+        };
+
+        let auto_capture = matches!(
+            item.router_data.request.capture_method,
+            Some(common_enums::CaptureMethod::Automatic)
+        );
+
+        let payment_method_options = Some(AirwallexPaymentOptions {
+            card: Some(AirwallexCardOptions {
+                auto_capture: Some(auto_capture),
+            }),
+        });
+
+        let device_data = get_device_data_setup_mandate(&item.router_data.request)?;
+
+        // Convert amount
+        let amount = item
+            .connector
+            .amount_converter
+            .convert(
+                item.router_data
+                    .request
+                    .minor_amount
+                    .unwrap_or(common_utils::MinorUnit::new(0)),
+                item.router_data.request.currency,
+            )
+            .map_err(|e| {
+                errors::ConnectorError::RequestEncodingFailedWithReason(format!(
+                    "Amount conversion failed: {e}"
+                ))
+            })?;
+
+        Ok(Self {
+            request_id: format!(
+                "mandate_{}",
+                item.router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+            ),
+            amount,
+            currency: item.router_data.request.currency,
+            merchant_order_id: item
+                .router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            customer_id: None,
+            payment_method,
+            payment_method_options,
+            return_url: item.router_data.request.return_url.clone(),
+            device_data,
+        })
+    }
+}
+
+// Helper function to extract device data from browser info for SetupMandate
+fn get_device_data_setup_mandate<T: PaymentMethodDataTypes>(
+    request: &SetupMandateRequestData<T>,
+) -> Result<Option<AirwallexDeviceData>, error_stack::Report<errors::ConnectorError>> {
+    let browser_info = match request.browser_info.clone() {
+        Some(info) => info,
+        None => return Ok(None),
+    };
+
+    let browser = AirwallexBrowser {
+        java_enabled: browser_info.get_java_enabled().unwrap_or(false),
+        javascript_enabled: browser_info.get_java_script_enabled().unwrap_or(true),
+        user_agent: browser_info.get_user_agent().unwrap_or_default(),
+    };
+
+    let mobile = {
+        let device_model = browser_info.device_model.clone();
+        let os_type = browser_info.os_type.clone();
+        let os_version = browser_info.os_version.clone();
+
+        if device_model.is_some() || os_type.is_some() || os_version.is_some() {
+            Some(AirwallexMobile {
+                device_model,
+                os_type,
+                os_version,
+            })
+        } else {
+            None
+        }
+    };
+
+    Ok(Some(AirwallexDeviceData {
+        accept_header: browser_info.get_accept_header().unwrap_or_default(),
+        browser,
+        ip_address: browser_info
+            .get_ip_address()
+            .ok()
+            .map(|ip| Secret::new(ip.expose().to_string())),
+        language: browser_info.get_language().unwrap_or_default(),
+        mobile,
+        screen_color_depth: browser_info.get_color_depth().unwrap_or(24),
+        screen_height: browser_info.get_screen_height().unwrap_or(1080),
+        screen_width: browser_info.get_screen_width().unwrap_or(1920),
+        timezone: browser_info
+            .get_time_zone()
+            .map(|tz| tz.to_string())
+            .unwrap_or_else(|_| "0".to_string()),
+    }))
+}
+
+// Response transformer for SetupMandate flow
+impl<T: PaymentMethodDataTypes> TryFrom<ResponseRouterData<AirwallexSetupMandateResponse, Self>>
+    for RouterDataV2<
+        SetupMandate,
+        PaymentFlowData,
+        SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<AirwallexSetupMandateResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let status = get_payment_status(&item.response.status, &item.response.next_action);
+
+        // Extract mandate reference from payment_method.id if available
+        let mandate_reference = item.response.payment_method.as_ref().and_then(|pm| {
+            pm.id.clone().map(|id| {
+                Box::new(domain_types::connector_types::MandateReference {
+                    connector_mandate_id: Some(id),
+                    payment_method_id: None,
+                    connector_mandate_request_reference_id: None,
+                })
+            })
+        });
+
+        // Extract network transaction ID
+        let network_txn_id = item
+            .response
+            .network_transaction_id
+            .or(item.response.authorization_code.clone());
+
+        let connector_metadata = None;
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id),
+                redirection_data: None,
+                mandate_reference,
+                connector_metadata,
+                network_txn_id,
+                connector_response_reference_id: item.response.payment_intent_id,
+                incremental_authorization_allowed: Some(false),
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+// ===== REPEAT PAYMENT FLOW TYPES =====
+// RepeatPayment: Uses stored consent ID for MIT transactions
+
+#[derive(Debug, Serialize)]
+pub struct AirwallexRepeatPaymentRequest {
+    pub request_id: String,
+    pub amount: StringMajorUnit,
+    pub currency: Currency,
+    pub merchant_order_id: String,
+    pub consent_id: String,
+    pub customer_id: Option<String>,
+    pub payment_method_options: Option<AirwallexPaymentOptions>,
+    pub device_data: Option<AirwallexDeviceData>,
+}
+
+// Type alias - reuse the same response structure for RepeatPayment
+pub type AirwallexRepeatPaymentResponse = AirwallexPaymentsResponse;
+
+// Request transformer for RepeatPayment flow
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        super::AirwallexRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for AirwallexRepeatPaymentRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: super::AirwallexRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        // Get consent ID from mandate reference
+        let consent_id = match &item.router_data.request.mandate_reference {
+            domain_types::connector_types::MandateReferenceId::ConnectorMandateId(id) => id
+                .get_connector_mandate_id()
+                .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                    field_name: "mandate_reference.connector_mandate_id",
+                })?,
+            _ => {
+                return Err(errors::ConnectorError::MissingRequiredField {
+                    field_name: "mandate_reference.connector_mandate_id",
+                }
+                .into())
+            }
+        };
+
+        let auto_capture = matches!(
+            item.router_data.request.capture_method,
+            Some(common_enums::CaptureMethod::Automatic)
+        );
+
+        let payment_method_options = Some(AirwallexPaymentOptions {
+            card: Some(AirwallexCardOptions {
+                auto_capture: Some(auto_capture),
+            }),
+        });
+
+        let device_data = get_device_data_repeat_payment(&item.router_data.request)?;
+
+        // Convert amount
+        let amount = item
+            .connector
+            .amount_converter
+            .convert(
+                common_utils::MinorUnit::new(item.router_data.request.amount),
+                item.router_data.request.currency,
+            )
+            .map_err(|e| {
+                errors::ConnectorError::RequestEncodingFailedWithReason(format!(
+                    "Amount conversion failed: {e}"
+                ))
+            })?;
+
+        Ok(Self {
+            request_id: format!(
+                "repeat_{}",
+                item.router_data
+                    .resource_common_data
+                    .connector_request_reference_id
+            ),
+            amount,
+            currency: item.router_data.request.currency,
+            merchant_order_id: item
+                .router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            consent_id,
+            customer_id: None,
+            payment_method_options,
+            device_data,
+        })
+    }
+}
+
+// Helper function to extract device data from browser info for RepeatPayment
+fn get_device_data_repeat_payment<T: PaymentMethodDataTypes>(
+    request: &RepeatPaymentData<T>,
+) -> Result<Option<AirwallexDeviceData>, error_stack::Report<errors::ConnectorError>> {
+    let browser_info = match request.browser_info.clone() {
+        Some(info) => info,
+        None => return Ok(None),
+    };
+
+    let browser = AirwallexBrowser {
+        java_enabled: browser_info.get_java_enabled().unwrap_or(false),
+        javascript_enabled: browser_info.get_java_script_enabled().unwrap_or(true),
+        user_agent: browser_info.get_user_agent().unwrap_or_default(),
+    };
+
+    let mobile = {
+        let device_model = browser_info.device_model.clone();
+        let os_type = browser_info.os_type.clone();
+        let os_version = browser_info.os_version.clone();
+
+        if device_model.is_some() || os_type.is_some() || os_version.is_some() {
+            Some(AirwallexMobile {
+                device_model,
+                os_type,
+                os_version,
+            })
+        } else {
+            None
+        }
+    };
+
+    Ok(Some(AirwallexDeviceData {
+        accept_header: browser_info.get_accept_header().unwrap_or_default(),
+        browser,
+        ip_address: browser_info
+            .get_ip_address()
+            .ok()
+            .map(|ip| Secret::new(ip.expose().to_string())),
+        language: browser_info.get_language().unwrap_or_default(),
+        mobile,
+        screen_color_depth: browser_info.get_color_depth().unwrap_or(24),
+        screen_height: browser_info.get_screen_height().unwrap_or(1080),
+        screen_width: browser_info.get_screen_width().unwrap_or(1920),
+        timezone: browser_info
+            .get_time_zone()
+            .map(|tz| tz.to_string())
+            .unwrap_or_else(|_| "0".to_string()),
+    }))
+}
+
+// Response transformer for RepeatPayment flow
+impl<T: PaymentMethodDataTypes> TryFrom<ResponseRouterData<AirwallexRepeatPaymentResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: ResponseRouterData<AirwallexRepeatPaymentResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let status = get_payment_status(&item.response.status, &item.response.next_action);
+
+        // Extract network transaction ID
+        let network_txn_id = item
+            .response
+            .network_transaction_id
+            .or(item.response.authorization_code.clone());
+
+        let connector_metadata = None;
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(item.response.id),
+                redirection_data: None,
+                mandate_reference: None,
+                connector_metadata,
+                network_txn_id,
+                connector_response_reference_id: item.response.payment_intent_id,
+                incremental_authorization_allowed: Some(false),
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
     }
 }

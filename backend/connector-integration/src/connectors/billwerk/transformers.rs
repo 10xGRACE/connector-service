@@ -9,11 +9,12 @@ use common_utils::{
 use crate::{connectors::billwerk::BillwerkRouterData, types::ResponseRouterData, utils};
 
 use domain_types::{
-    connector_flow::{Authorize, Capture, PaymentMethodToken, RSync},
+    connector_flow::{Authorize, Capture, PaymentMethodToken, RSync, RepeatPayment, SetupMandate},
     connector_types::{
         PaymentFlowData, PaymentMethodTokenResponse, PaymentMethodTokenizationData,
         PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData, RefundFlowData,
-        RefundSyncData, RefundsData, RefundsResponseData, ResponseId,
+        RefundSyncData, RefundsData, RefundsResponseData, RepeatPaymentData, ResponseId,
+        SetupMandateRequestData,
     },
     errors::ConnectorError,
     payment_method_data::{
@@ -162,6 +163,33 @@ pub struct BillwerkRefundRequest {
 pub type BillwerkRefundResponse = RefundResponse;
 
 pub type BillwerkRSyncResponse = RefundResponse;
+
+// MIT (SetupMandate and RepeatPayment) Response Types
+pub type BillwerkSetupMandateResponse = BillwerkPaymentsResponse;
+pub type BillwerkRepeatPaymentResponse = BillwerkPaymentsResponse;
+
+// MIT Request Types
+#[derive(Debug, Serialize)]
+pub struct BillwerkSetupMandateRequest {
+    handle: String,
+    amount: MinorUnit,
+    source: Secret<String>,
+    currency: common_enums::Currency,
+    customer: BillwerkCustomerObject,
+    metadata: Option<common_utils::pii::SecretSerdeValue>,
+    settle: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BillwerkRepeatPaymentRequest {
+    handle: String,
+    amount: MinorUnit,
+    source: Secret<String>,
+    currency: common_enums::Currency,
+    customer: BillwerkCustomerObject,
+    metadata: Option<common_utils::pii::SecretSerdeValue>,
+    settle: bool,
+}
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
     TryFrom<
@@ -505,6 +533,175 @@ impl TryFrom<ResponseRouterData<RefundResponse, Self>>
                 status_code: item.http_code,
             }),
             ..item.router_data
+        })
+    }
+}
+
+// ===== MIT (SetupMandate and RepeatPayment) TryFrom Implementations =====
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        BillwerkRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for BillwerkSetupMandateRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: BillwerkRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        if item.router_data.resource_common_data.is_three_ds() {
+            return Err(ConnectorError::NotImplemented(
+                "Three_ds mandate setup through Billwerk".to_string(),
+            )
+            .into());
+        };
+        let PaymentMethodTokenFlow::Token(source) = item
+            .router_data
+            .resource_common_data
+            .get_payment_method_token()?;
+        Ok(Self {
+            handle: item
+                .router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            amount: item
+                .router_data
+                .request
+                .minor_amount
+                .unwrap_or(MinorUnit::new(0)),
+            source,
+            currency: item.router_data.request.currency,
+            customer: BillwerkCustomerObject {
+                handle: item.router_data.resource_common_data.customer_id.clone(),
+                email: item.router_data.request.email.clone(),
+                address: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_line1(),
+                address2: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_line2(),
+                city: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_city(),
+                country: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_country(),
+                first_name: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_first_name(),
+                last_name: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_last_name(),
+            },
+            metadata: item.router_data.request.metadata.clone(),
+            settle: matches!(
+                item.router_data.request.capture_method,
+                Some(common_enums::CaptureMethod::Automatic)
+                    | None
+                    | Some(common_enums::CaptureMethod::SequentialAutomatic)
+            ),
+        })
+    }
+}
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        BillwerkRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for BillwerkRepeatPaymentRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(
+        item: BillwerkRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        if item.router_data.resource_common_data.is_three_ds() {
+            return Err(ConnectorError::NotImplemented(
+                "Three_ds repeat payments through Billwerk".to_string(),
+            )
+            .into());
+        };
+        let PaymentMethodTokenFlow::Token(source) = item
+            .router_data
+            .resource_common_data
+            .get_payment_method_token()?;
+        Ok(Self {
+            handle: item
+                .router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            amount: item.router_data.request.minor_amount,
+            source,
+            currency: item.router_data.request.currency,
+            customer: BillwerkCustomerObject {
+                handle: item.router_data.resource_common_data.customer_id.clone(),
+                email: item.router_data.request.email.clone(),
+                address: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_line1(),
+                address2: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_line2(),
+                city: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_city(),
+                country: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_country(),
+                first_name: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_first_name(),
+                last_name: item
+                    .router_data
+                    .resource_common_data
+                    .get_optional_billing_last_name(),
+            },
+            metadata: item.router_data.request.metadata.clone(),
+            settle: item.router_data.request.is_auto_capture()?,
         })
     }
 }

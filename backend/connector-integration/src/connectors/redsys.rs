@@ -49,11 +49,13 @@ pub mod transformers;
 
 use requests::{
     RedsysAuthenticateRequest, RedsysAuthorizeRequest, RedsysCaptureRequest,
-    RedsysPreAuthenticateRequest, RedsysRefundRequest, RedsysVoidRequest,
+    RedsysPreAuthenticateRequest, RedsysRefundRequest, RedsysRepeatPaymentRequest,
+    RedsysSetupMandateRequest, RedsysVoidRequest,
 };
 use responses::{
     RedsysAuthenticateResponse, RedsysAuthorizeResponse, RedsysCaptureResponse,
-    RedsysPreAuthenticateResponse, RedsysRefundResponse, RedsysVoidResponse,
+    RedsysPreAuthenticateResponse, RedsysRefundResponse, RedsysRepeatPaymentResponse,
+    RedsysSetupMandateResponse, RedsysVoidResponse,
 };
 
 pub(crate) mod headers {
@@ -253,6 +255,18 @@ macros::create_all_prerequisites!(
             request_body: RedsysRefundRequest,
             response_body: RedsysRefundResponse,
             router_data: RouterDataV2<Refund, RefundFlowData, RefundsData, RefundsResponseData>,
+        ),
+        (
+            flow: SetupMandate,
+            request_body: RedsysSetupMandateRequest,
+            response_body: RedsysSetupMandateResponse,
+            router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: RepeatPayment,
+            request_body: RedsysRepeatPaymentRequest,
+            response_body: RedsysRepeatPaymentResponse,
+            router_data: RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
         )
     ],
     amount_converters: [],
@@ -598,6 +612,64 @@ macros::macro_connector_implementation!(
     }
 );
 
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Redsys,
+    curl_request: Json(RedsysSetupMandateRequest),
+    curl_response: RedsysSetupMandateResponse,
+    flow_name: SetupMandate,
+    resource_common_data: PaymentFlowData,
+    flow_request: SetupMandateRequestData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            self.build_headers(req)
+        }
+
+        fn get_url(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!("{}/sis/rest/trataPeticionREST", self.connector_base_url_payments(req)))
+        }
+    }
+);
+
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Redsys,
+    curl_request: Json(RedsysRepeatPaymentRequest),
+    curl_response: RedsysRepeatPaymentResponse,
+    flow_name: RepeatPayment,
+    resource_common_data: PaymentFlowData,
+    flow_request: RepeatPaymentData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            self.build_headers(req)
+        }
+
+        fn get_url(
+            &self,
+            req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!("{}/sis/rest/trataPeticionREST", self.connector_base_url_payments(req)))
+        }
+    }
+);
+
 // Manual implementation for RSync since it uses SOAP XML
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     ConnectorIntegrationV2<RSync, RefundFlowData, RefundSyncData, RefundsResponseData>
@@ -721,16 +793,6 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
 
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     ConnectorIntegrationV2<
-        SetupMandate,
-        PaymentFlowData,
-        SetupMandateRequestData<T>,
-        PaymentsResponseData,
-    > for Redsys<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
         VoidPC,
         PaymentFlowData,
         PaymentsCancelPostCaptureData,
@@ -772,16 +834,6 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
         PostAuthenticate,
         PaymentFlowData,
         PaymentsPostAuthenticateData<T>,
-        PaymentsResponseData,
-    > for Redsys<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        RepeatPayment,
-        PaymentFlowData,
-        RepeatPaymentData<T>,
         PaymentsResponseData,
     > for Redsys<T>
 {

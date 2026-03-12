@@ -1,12 +1,13 @@
 use crate::types::ResponseRouterData;
 use common_enums::{AttemptStatus, RefundStatus};
-use common_utils::types::{AmountConvertor, FloatMajorUnit, FloatMajorUnitForConnector};
+use common_utils::types::{AmountConvertor, FloatMajorUnit, FloatMajorUnitForConnector, MinorUnit};
 use domain_types::{
-    connector_flow::{Authorize, Capture, PSync, RSync, Refund, Void},
+    connector_flow::{Authorize, Capture, PSync, RSync, Refund, RepeatPayment, SetupMandate, Void},
     connector_types::{
-        MandateReference, PaymentFlowData, PaymentVoidData, PaymentsAuthorizeData,
-        PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData, RefundFlowData,
-        RefundSyncData, RefundsData, RefundsResponseData, ResponseId,
+        MandateReference, MandateReferenceId, PaymentFlowData, PaymentVoidData,
+        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData,
+        RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData, RepeatPaymentData,
+        ResponseId, SetupMandateRequestData,
     },
     errors,
     payment_method_data::{
@@ -954,6 +955,389 @@ impl TryFrom<ResponseRouterData<StandardResponse, Self>>
                 resource_id: ResponseId::ConnectorTransactionId(response.transactionid.clone()),
                 redirection_data: None,
                 mandate_reference: None,
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: Some(response.orderid.clone()),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+// ===== MIT (Merchant Initiated Transaction) FLOW STRUCTURES =====
+// SetupMandate: Initial CIT (Customer Initiated Transaction) that stores credentials
+// RepeatPayment: Subsequent MIT using stored credentials
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredCredentialIndicator {
+    Stored,
+    Used,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitiatedBy {
+    Customer,
+    Merchant,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomerVaultAction {
+    AddCustomer,
+}
+
+// SetupMandate Request - Uses stored_credential_indicator=stored, initiated_by=customer, customer_vault=add_customer
+#[derive(Debug, Serialize)]
+pub struct NmiSetupMandateRequest {
+    security_key: Secret<String>,
+    #[serde(rename = "type")]
+    transaction_type: TransactionType,
+    amount: FloatMajorUnit,
+    #[serde(rename = "stored_credential_indicator")]
+    stored_credential_indicator: StoredCredentialIndicator,
+    #[serde(rename = "initiated_by")]
+    initiated_by: InitiatedBy,
+    #[serde(rename = "customer_vault")]
+    customer_vault: CustomerVaultAction,
+    // Card fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ccnumber: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ccexp: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cvv: Option<Secret<String>>,
+    // ACH fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkname: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkaba: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkaccount: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_holder_type: Option<common_enums::BankHolderType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_type: Option<common_enums::BankType>,
+    orderid: String,
+    #[serde(flatten)]
+    merchant_defined_field: Option<NmiMerchantDefinedField>,
+}
+
+// RepeatPayment Request - Uses stored_credential_indicator=used, initiated_by=merchant, customer_vault_id
+#[derive(Debug, Serialize)]
+pub struct NmiRepeatPaymentRequest {
+    security_key: Secret<String>,
+    #[serde(rename = "type")]
+    transaction_type: TransactionType,
+    amount: FloatMajorUnit,
+    #[serde(rename = "stored_credential_indicator")]
+    stored_credential_indicator: StoredCredentialIndicator,
+    #[serde(rename = "initiated_by")]
+    initiated_by: InitiatedBy,
+    customer_vault_id: Secret<String>,
+    orderid: String,
+    #[serde(flatten)]
+    merchant_defined_field: Option<NmiMerchantDefinedField>,
+}
+
+// SetupMandate and RepeatPayment use the same response type as Authorize
+pub type NmiSetupMandateResponse = StandardResponse;
+pub type NmiRepeatPaymentResponse = StandardResponse;
+
+// ===== SETUP MANDATE REQUEST TRANSFORMER =====
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        super::NmiRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for NmiSetupMandateRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: super::NmiRouterData<
+            RouterDataV2<
+                SetupMandate,
+                PaymentFlowData,
+                SetupMandateRequestData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+        let auth = NmiAuthType::try_from(&router_data.connector_auth_type)?;
+
+        // Convert amount from minor units to major units using framework converter
+        let converter = FloatMajorUnitForConnector;
+        let amount = converter
+            .convert(
+                router_data
+                    .request
+                    .minor_amount
+                    .unwrap_or(MinorUnit::zero()),
+                router_data.request.currency,
+            )
+            .change_context(errors::ConnectorError::RequestEncodingFailed)?;
+
+        // Extract card or ACH fields from payment method data
+        let (
+            ccnumber,
+            ccexp,
+            cvv,
+            payment,
+            checkname,
+            checkaba,
+            checkaccount,
+            account_holder_type,
+            account_type,
+        ) = match &router_data.request.payment_method_data {
+            PaymentMethodData::Card(card_data) => {
+                let ccnumber_str = card_data.card_number.peek().to_string();
+                let expiry_str =
+                    card_data.get_card_expiry_month_year_2_digit_with_delimiter("".to_string())?;
+                (
+                    Some(Secret::new(ccnumber_str)),
+                    Some(expiry_str),
+                    Some(card_data.card_cvc.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_account_holder_name,
+                bank_holder_type,
+                bank_type,
+                ..
+            }) => {
+                let checkname = bank_account_holder_name.clone().ok_or_else(|| {
+                    error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                        field_name: "bank_account_holder_name",
+                    })
+                })?;
+                (
+                    None,
+                    None,
+                    None,
+                    Some("check".to_string()),
+                    Some(checkname),
+                    Some(routing_number.clone()),
+                    Some(account_number.clone()),
+                    *bank_holder_type,
+                    *bank_type,
+                )
+            }
+            _ => {
+                return Err(error_stack::report!(
+                    errors::ConnectorError::NotImplemented(
+                        "SetupMandate only supports Card or ACH Bank Debit payments".to_string()
+                    )
+                ))
+            }
+        };
+
+        Ok(Self {
+            security_key: auth.api_key,
+            transaction_type: TransactionType::Auth, // Auth for mandate setup
+            amount,
+            stored_credential_indicator: StoredCredentialIndicator::Stored,
+            initiated_by: InitiatedBy::Customer,
+            customer_vault: CustomerVaultAction::AddCustomer,
+            ccnumber,
+            ccexp,
+            cvv,
+            payment,
+            checkname,
+            checkaba,
+            checkaccount,
+            account_holder_type,
+            account_type,
+            orderid: router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            merchant_defined_field: router_data
+                .request
+                .metadata
+                .as_ref()
+                .map(|m| NmiMerchantDefinedField::new(m.peek())),
+        })
+    }
+}
+
+// ===== SETUP MANDATE RESPONSE TRANSFORMER =====
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<StandardResponse, Self>>
+    for RouterDataV2<
+        SetupMandate,
+        PaymentFlowData,
+        SetupMandateRequestData<T>,
+        PaymentsResponseData,
+    >
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(item: ResponseRouterData<StandardResponse, Self>) -> Result<Self, Self::Error> {
+        let response = &item.response;
+
+        // Determine status based on response code
+        let status = match response.response.as_str() {
+            "1" => AttemptStatus::Authorized, // Mandate setup successful (Auth type)
+            "2" | "3" => AttemptStatus::Failure, // Declined or Error
+            _ => AttemptStatus::Pending,
+        };
+
+        // Build mandate reference with customer_vault_id (stored in customer_vault_id field)
+        let mandate_reference: Option<Box<MandateReference>> =
+            response.customer_vault_id.clone().map(|vault_id| {
+                Box::new(MandateReference {
+                    connector_mandate_id: Some(vault_id.expose()),
+                    payment_method_id: None,
+                    connector_mandate_request_reference_id: None,
+                })
+            });
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(response.transactionid.clone()),
+                redirection_data: None,
+                mandate_reference,
+                connector_metadata: None,
+                network_txn_id: None,
+                connector_response_reference_id: Some(response.orderid.clone()),
+                incremental_authorization_allowed: None,
+                status_code: item.http_code,
+            }),
+            resource_common_data: PaymentFlowData {
+                status,
+                ..item.router_data.resource_common_data
+            },
+            ..item.router_data
+        })
+    }
+}
+
+// ===== REPEAT PAYMENT REQUEST TRANSFORMER =====
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        super::NmiRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for NmiRepeatPaymentRequest
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(
+        item: super::NmiRouterData<
+            RouterDataV2<
+                RepeatPayment,
+                PaymentFlowData,
+                RepeatPaymentData<T>,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let router_data = &item.router_data;
+        let auth = NmiAuthType::try_from(&router_data.connector_auth_type)?;
+
+        // Get customer_vault_id from mandate reference
+        let customer_vault_id = match &router_data.request.mandate_reference {
+            MandateReferenceId::ConnectorMandateId(connector_mandate_ref) => connector_mandate_ref
+                .get_connector_mandate_id()
+                .ok_or_else(|| {
+                    error_stack::report!(errors::ConnectorError::MissingRequiredField {
+                        field_name: "customer_vault_id",
+                    })
+                })?,
+            _ => {
+                return Err(error_stack::report!(
+                    errors::ConnectorError::NotImplemented(
+                        "Only connector mandate ID is supported for NMI MIT".to_string()
+                    )
+                ))
+            }
+        };
+
+        // Convert amount from minor units to major units using framework converter
+        let converter = FloatMajorUnitForConnector;
+        let amount = converter
+            .convert(
+                router_data.request.minor_amount,
+                router_data.request.currency,
+            )
+            .change_context(errors::ConnectorError::RequestEncodingFailed)?;
+
+        Ok(Self {
+            security_key: auth.api_key,
+            transaction_type: TransactionType::Sale, // Sale for MIT transactions
+            amount,
+            stored_credential_indicator: StoredCredentialIndicator::Used,
+            initiated_by: InitiatedBy::Merchant,
+            customer_vault_id: Secret::new(customer_vault_id),
+            orderid: router_data
+                .resource_common_data
+                .connector_request_reference_id
+                .clone(),
+            merchant_defined_field: router_data
+                .request
+                .metadata
+                .as_ref()
+                .map(|m| NmiMerchantDefinedField::new(m.peek())),
+        })
+    }
+}
+
+// ===== REPEAT PAYMENT RESPONSE TRANSFORMER =====
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<ResponseRouterData<StandardResponse, Self>>
+    for RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>
+{
+    type Error = error_stack::Report<errors::ConnectorError>;
+
+    fn try_from(item: ResponseRouterData<StandardResponse, Self>) -> Result<Self, Self::Error> {
+        let response = &item.response;
+
+        // Determine status based on response code
+        // MIT transactions use Sale type, so success = Charged
+        let status = match response.response.as_str() {
+            "1" => AttemptStatus::Charged,       // MIT successful
+            "2" | "3" => AttemptStatus::Failure, // Declined or Error
+            _ => AttemptStatus::Pending,
+        };
+
+        Ok(Self {
+            response: Ok(PaymentsResponseData::TransactionResponse {
+                resource_id: ResponseId::ConnectorTransactionId(response.transactionid.clone()),
+                redirection_data: None,
+                mandate_reference: None, // MIT doesn't return new mandate reference
                 connector_metadata: None,
                 network_txn_id: None,
                 connector_response_reference_id: Some(response.orderid.clone()),

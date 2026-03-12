@@ -127,3 +127,23 @@ pub struct JpmorganRefundRequest {
 pub struct JpmorganMerchantRefund {
     pub merchant_software: JpmorganMerchantSoftware,
 }
+
+// ===== SETUP MANDATE (CIT - Customer Initiated Transaction) =====
+// Request to create stored credentials for future MIT payments
+// Uses the same structure as regular payments but with zero amount
+
+pub type JpmorganSetupMandateRequest<T> = JpmorganPaymentsRequest<T>;
+
+// ===== REPEAT PAYMENT (MIT - Merchant Initiated Transaction) =====
+// Request to use stored credentials for merchant-initiated payments
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JpmorganRepeatPaymentRequest {
+    pub capture_method: CapMethod,
+    pub amount: MinorUnit,
+    pub currency: common_enums::Currency,
+    pub merchant: JpmorganMerchant,
+    pub statement_descriptor: Secret<String>,
+    pub stored_credential_id: Secret<String>,
+}

@@ -43,8 +43,9 @@ use transformers::{
     CaptureRequest, RapydAuthType, RapydPaymentsRequest,
     RapydPaymentsResponse as RapydCaptureResponse, RapydPaymentsResponse as RapydPSyncResponse,
     RapydPaymentsResponse, RapydPaymentsResponse as RapydVoidResponse,
-    RapydPaymentsResponse as RapydAuthorizeResponse, RapydRefundRequest, RefundResponse,
-    RefundResponse as RapydRSyncResponse,
+    RapydPaymentsResponse as RapydAuthorizeResponse, RapydRefundRequest, RapydRepeatPaymentRequest,
+    RapydRepeatPaymentResponse, RapydSetupMandateRequest, RapydSetupMandateResponse,
+    RefundResponse, RefundResponse as RapydRSyncResponse,
 };
 
 use super::macros;
@@ -128,6 +129,7 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     connector_types::PaymentOrderCreate for Rapyd<T>
 {
 }
+// SetupMandateV2 and RepeatPaymentV2 trait implementations
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     connector_types::SetupMandateV2<T> for Rapyd<T>
 {
@@ -321,6 +323,18 @@ macros::create_all_prerequisites!(
             flow: RSync,
             response_body: RapydRSyncResponse,
             router_data: RouterDataV2<RSync, RefundFlowData, RefundSyncData, RefundsResponseData>,
+        ),
+        (
+            flow: SetupMandate,
+            request_body: RapydSetupMandateRequest<T>,
+            response_body: RapydSetupMandateResponse,
+            router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: RepeatPayment,
+            request_body: RapydRepeatPaymentRequest,
+            response_body: RapydRepeatPaymentResponse,
+            router_data: RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
         )
     ],
     amount_converters: [
@@ -599,6 +613,78 @@ macros::macro_connector_implementation!(
     }
 );
 
+// Setup Mandate - First transaction to save payment method for future use
+// Uses POST /v1/payments with save_payment_method=true and initiation_type="customer"
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Rapyd,
+    curl_request: Json(RapydSetupMandateRequest<T>),
+    curl_response: RapydSetupMandateResponse,
+    flow_name: SetupMandate,
+    resource_common_data: PaymentFlowData,
+    flow_request: SetupMandateRequestData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            let url = self.get_url(req)?;
+            let url_path = url.strip_prefix(self.connector_base_url_payments(req))
+                .unwrap_or(&url);
+            let body = self.get_request_body(req)?
+                .map(|content| content.get_inner_value().expose())
+                .unwrap_or_default();
+            self.build_headers(req, "post", url_path, &body)
+        }
+        fn get_url(
+            &self,
+            req: &RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!("{}/v1/payments", self.connector_base_url_payments(req)))
+        }
+    }
+);
+
+// Repeat Payment - Subsequent MIT using stored payment method
+// Uses POST /v1/payments with stored payment_method ID and initiation_type="merchant"
+macros::macro_connector_implementation!(
+    connector_default_implementations: [get_content_type, get_error_response_v2],
+    connector: Rapyd,
+    curl_request: Json(RapydRepeatPaymentRequest),
+    curl_response: RapydRepeatPaymentResponse,
+    flow_name: RepeatPayment,
+    resource_common_data: PaymentFlowData,
+    flow_request: RepeatPaymentData<T>,
+    flow_response: PaymentsResponseData,
+    http_method: Post,
+    generic_type: T,
+    [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
+    other_functions: {
+        fn get_headers(
+            &self,
+            req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+            let url = self.get_url(req)?;
+            let url_path = url.strip_prefix(self.connector_base_url_payments(req))
+                .unwrap_or(&url);
+            let body = self.get_request_body(req)?
+                .map(|content| content.get_inner_value().expose())
+                .unwrap_or_default();
+            self.build_headers(req, "post", url_path, &body)
+        }
+        fn get_url(
+            &self,
+            req: &RouterDataV2<RepeatPayment, PaymentFlowData, RepeatPaymentData<T>, PaymentsResponseData>,
+        ) -> CustomResult<String, errors::ConnectorError> {
+            Ok(format!("{}/v1/payments", self.connector_base_url_payments(req)))
+        }
+    }
+);
+
 // Stub implementations for unsupported flows
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     ConnectorIntegrationV2<
@@ -625,26 +711,6 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
 impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
     ConnectorIntegrationV2<Accept, DisputeFlowData, AcceptDisputeData, DisputeResponseData>
     for Rapyd<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        SetupMandate,
-        PaymentFlowData,
-        SetupMandateRequestData<T>,
-        PaymentsResponseData,
-    > for Rapyd<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        RepeatPayment,
-        PaymentFlowData,
-        RepeatPaymentData<T>,
-        PaymentsResponseData,
-    > for Rapyd<T>
 {
 }
 

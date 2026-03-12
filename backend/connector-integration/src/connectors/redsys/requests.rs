@@ -9,6 +9,8 @@ pub type RedsysAuthorizeRequest = super::transformers::RedsysTransaction;
 pub type RedsysCaptureRequest = super::transformers::RedsysTransaction;
 pub type RedsysVoidRequest = super::transformers::RedsysTransaction;
 pub type RedsysRefundRequest = super::transformers::RedsysTransaction;
+pub type RedsysSetupMandateRequest = super::transformers::RedsysTransaction;
+pub type RedsysRepeatPaymentRequest = super::transformers::RedsysTransaction;
 
 /// Main payment request structure for Redsys API
 #[derive(Debug, Serialize)]
@@ -16,15 +18,30 @@ pub type RedsysRefundRequest = super::transformers::RedsysTransaction;
 pub struct RedsysPaymentRequest {
     pub ds_merchant_amount: StringMinorUnit,
     pub ds_merchant_currency: String,
-    pub ds_merchant_cvv2: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_cvv2: Option<Secret<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ds_merchant_emv3ds: Option<RedsysEmvThreeDsRequestData>,
-    pub ds_merchant_expirydate: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_expirydate: Option<Secret<String>>,
     pub ds_merchant_merchantcode: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_identifier: Option<String>,
     pub ds_merchant_order: String,
-    pub ds_merchant_pan: cards::CardNumber,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_pan: Option<cards::CardNumber>,
     pub ds_merchant_terminal: Secret<String>,
     pub ds_merchant_transactiontype: RedsysTransactionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_cof_ini: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_cof_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_cof_txnid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_excep_sca: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds_merchant_directpayment: Option<String>,
 }
 
 #[derive(Debug)]
