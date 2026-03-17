@@ -12,7 +12,7 @@ use domain_types::{
         ResponseId,
     },
     errors,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData},
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
@@ -97,6 +97,8 @@ pub struct MolliePaymentsRequest {
 pub enum MolliePaymentMethodData {
     #[serde(rename = "creditcard")]
     CreditCard(Box<CreditCardMethodData>),
+    #[serde(rename = "creditcard")]
+    GooglePay(Box<CreditCardMethodData>),
 }
 
 // Credit Card Method Data
@@ -205,6 +207,51 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     });
 
                 MolliePaymentMethodData::CreditCard(Box::new(CreditCardMethodData {
+                    card_token,
+                    billing_address,
+                    shipping_address: None,
+                }))
+            }
+            PaymentMethodData::Wallet(WalletData::GooglePay(google_pay_data)) => {
+                // For Google Pay, Mollie uses the creditcard method with Google Pay token
+                // Extract the encrypted Google Pay token
+                let card_token = match &google_pay_data.tokenization_data {
+                    domain_types::payment_method_data::GpayTokenizationData::Encrypted(
+                        encrypted_data,
+                    ) => Some(Secret::new(encrypted_data.token.clone())),
+                    domain_types::payment_method_data::GpayTokenizationData::Decrypted(_) => {
+                        // Mollie requires the encrypted token for processing
+                        return Err(errors::ConnectorError::NotSupported {
+                            message: "Decrypted Google Pay token".to_string(),
+                            connector: "mollie",
+                        }
+                        .into());
+                    }
+                };
+
+                // Extract billing address if available
+                let billing_address = item
+                    .resource_common_data
+                    .address
+                    .get_payment_method_billing()
+                    .and_then(|billing| {
+                        let address = billing.address.as_ref()?;
+                        let line1 = address.line1.as_ref()?.peek().to_string();
+                        let street_and_number = match address.line2.as_ref() {
+                            Some(line2) => format!("{},{}", line1, line2.peek().as_str()),
+                            None => line1,
+                        };
+
+                        Some(MollieAddress {
+                            street_and_number: Secret::new(street_and_number),
+                            postal_code: Secret::new(address.zip.as_ref()?.peek().to_string()),
+                            city: address.city.as_ref()?.peek().to_string(),
+                            region: None,
+                            country: address.country?,
+                        })
+                    });
+
+                MolliePaymentMethodData::GooglePay(Box::new(CreditCardMethodData {
                     card_token,
                     billing_address,
                     shipping_address: None,
