@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use common_enums as enums;
 use common_utils::{ext_traits::OptionExt, pii, types::MinorUnit, CustomResult};
 use domain_types::{
-    connector_flow::{Authorize, Capture, Void},
+    connector_flow::{Authorize, Capture, IncrementalAuthorization, Void},
     connector_types::{
         MandateIds, MandateReference, MandateReferenceId, PaymentFlowData, PaymentVoidData,
-        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsResponseData, PaymentsSyncData,
-        RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData, RepeatPaymentData,
-        ResponseId,
+        PaymentsAuthorizeData, PaymentsCaptureData, PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData, PaymentsSyncData, RefundFlowData, RefundSyncData, RefundsData,
+        RefundsResponseData, RepeatPaymentData, ResponseId,
     },
     errors::ConnectorError,
     payment_method_data::{
@@ -1504,5 +1504,83 @@ fn extract_three_ds_metadata(response: &WorldpayPaymentsResponse) -> Option<serd
             }
         }
         _ => None,
+    }
+}
+
+// Incremental Authorization transformers
+
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    TryFrom<
+        WorldpayRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    > for WorldpayIncrementalAuthorizationRequest
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: WorldpayRouterData<
+            RouterDataV2<
+                IncrementalAuthorization,
+                PaymentFlowData,
+                PaymentsIncrementalAuthorizationData,
+                PaymentsResponseData,
+            >,
+            T,
+        >,
+    ) -> Result<Self, Self::Error> {
+        let request = item.router_data.request;
+        Ok(Self {
+            value: WorldpayIncrementalAuthorizationValue {
+                amount: request.minor_amount.get_amount_as_i64(),
+                currency: request.currency.to_string(),
+            },
+        })
+    }
+}
+
+impl<F> TryFrom<ResponseRouterData<WorldpayIncrementalAuthorizationResponse, Self>>
+    for RouterDataV2<F, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>
+{
+    type Error = error_stack::Report<ConnectorError>;
+    fn try_from(
+        item: ResponseRouterData<WorldpayIncrementalAuthorizationResponse, Self>,
+    ) -> Result<Self, Self::Error> {
+        let status = match item.response.outcome.as_str() {
+            "authorized" => enums::AuthorizationStatus::Success,
+            "refused" => enums::AuthorizationStatus::Failure,
+            _ => enums::AuthorizationStatus::Processing,
+        };
+
+        let connector_authorization_id = item
+            .response
+            .issuer
+            .map(|i| i.authorization_code.expose().to_string());
+
+        let response = Ok(PaymentsResponseData::IncrementalAuthorizationResponse {
+            status,
+            connector_authorization_id,
+            status_code: item.http_code,
+        });
+
+        let attempt_status = match item.response.outcome.as_str() {
+            "authorized" => enums::AttemptStatus::Authorized,
+            "refused" => enums::AttemptStatus::Failure,
+            _ => enums::AttemptStatus::Pending,
+        };
+
+        Ok(Self {
+            resource_common_data: PaymentFlowData {
+                status: attempt_status,
+                ..item.router_data.resource_common_data
+            },
+            response,
+            ..item.router_data
+        })
     }
 }

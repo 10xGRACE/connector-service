@@ -488,3 +488,23 @@ pub type WorldpayAuthenticateResponse = WorldpayPaymentsResponse;
 pub type WorldpayPreAuthenticateResponse = WorldpayPaymentsResponse;
 pub type WorldpayPostAuthenticateResponse = WorldpayPaymentsResponse;
 pub type WorldpayRepeatPaymentResponse = WorldpayPaymentsResponse;
+
+// Incremental Authorization Response types
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorldpayIncrementalAuthorizationResponse {
+    pub outcome: String,
+    pub amounts: WorldpayIncrementalAuthorizationAmounts,
+    #[serde(rename = "_links")]
+    pub links: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<Issuer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<PaymentsResponseScheme>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorldpayIncrementalAuthorizationAmounts {
+    #[serde(rename = "totalAuthorized")]
+    pub total_authorized: i64,
+    pub currency: String,
+}
