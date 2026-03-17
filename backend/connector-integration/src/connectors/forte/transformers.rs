@@ -11,7 +11,8 @@ use domain_types::{
     },
     errors::ConnectorError,
     payment_method_data::{
-        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+        BankDebitData, GpayTokenizationData, PaymentMethodData, PaymentMethodDataTypes,
+        RawCardNumber, WalletData,
     },
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
@@ -44,11 +45,26 @@ pub enum FortePaymentMethod<
 > {
     Card(Card<T>),
     Echeck(ForteEcheckWrapper),
+    GooglePay(ForteGooglePay),
 }
 
 #[derive(Debug, Serialize)]
 pub struct ForteEcheckWrapper {
     echeck: ForteEcheck,
+}
+
+// Google Pay data structures for Forte
+#[derive(Debug, Serialize)]
+pub struct ForteGooglePay {
+    card_type: ForteCardType,
+    name_on_card: Secret<String>,
+    account_number: Secret<String>,
+    expire_month: Secret<String>,
+    expire_year: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    card_verification_value: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    one_time_token: Option<Secret<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,8 +309,79 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     ))?
                 }
             },
+            PaymentMethodData::Wallet(ref wallet_data) => match wallet_data {
+                WalletData::GooglePay(ref google_pay_data) => {
+                    let action = match item.router_data.request.is_auto_capture()? {
+                        true => ForteAction::Sale,
+                        false => ForteAction::Authorize,
+                    };
+
+                    // Get the decrypted token data
+                    let token_data = match &google_pay_data.tokenization_data {
+                        GpayTokenizationData::Decrypted(decrypted_data) => decrypted_data,
+                        GpayTokenizationData::Encrypted(_) => {
+                            return Err(ConnectorError::InvalidWalletToken {
+                                wallet_name: "Google Pay".to_string(),
+                            }
+                            .into());
+                        }
+                    };
+
+                    // Get card number from decrypted data
+                    let card_number = token_data
+                        .application_primary_account_number
+                        .peek()
+                        .to_string();
+
+                    // Get card issuer from card number
+                    let card_issuer = utils::get_card_issuer(&card_number)?;
+                    let card_type = ForteCardType::try_from(card_issuer)?;
+
+                    let address = item
+                        .router_data
+                        .resource_common_data
+                        .get_billing_address()?;
+                    let first_name = address.get_first_name()?;
+                    let billing_address = BillingAddress {
+                        first_name: first_name.clone(),
+                        last_name: address.get_last_name().unwrap_or(first_name).clone(),
+                    };
+
+                    let authorization_amount = item
+                        .connector
+                        .amount_converter
+                        .convert(
+                            item.router_data.request.minor_amount,
+                            item.router_data.request.currency,
+                        )
+                        .change_context(ConnectorError::RequestEncodingFailed)?;
+
+                    let google_pay = ForteGooglePay {
+                        card_type,
+                        name_on_card: item
+                            .router_data
+                            .resource_common_data
+                            .get_billing_full_name()?,
+                        account_number: Secret::new(card_number),
+                        expire_month: token_data.card_exp_month.clone(),
+                        expire_year: token_data.card_exp_year.clone(),
+                        card_verification_value: None, // Google Pay doesn't provide CVV
+                        one_time_token: None,
+                    };
+
+                    Ok(Self {
+                        action,
+                        authorization_amount,
+                        billing_address,
+                        payment_method: FortePaymentMethod::GooglePay(google_pay),
+                    })
+                }
+                _ => Err(ConnectorError::NotImplemented(
+                    utils::get_unimplemented_payment_method_error_message("Forte"),
+                )
+                .into()),
+            },
             PaymentMethodData::CardRedirect(_)
-            | PaymentMethodData::Wallet(_)
             | PaymentMethodData::PayLater(_)
             | PaymentMethodData::BankRedirect(_)
             | PaymentMethodData::BankTransfer(_)
