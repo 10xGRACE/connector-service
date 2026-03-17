@@ -39,6 +39,7 @@ pub struct CardPaymentInformation<T: PaymentMethodDataTypes + Sync + Send + 'sta
 #[serde(untagged)]
 pub enum PaymentInformation<T: PaymentMethodDataTypes + Sync + Send + 'static + Serialize> {
     Cards(Box<CardPaymentInformation<T>>),
+    GooglePay(GooglePayPaymentInformation),
 }
 
 #[derive(Debug, Serialize)]
@@ -122,4 +123,17 @@ pub struct ReversalInformation {
 pub struct BarclaycardRefundRequest {
     pub order_information: OrderInformation,
     pub client_reference_information: ClientReferenceInformation,
+}
+
+// GooglePay wallet payment types
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GooglePayPaymentInformation {
+    pub fluid_data: FluidData,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FluidData {
+    pub value: String,
 }

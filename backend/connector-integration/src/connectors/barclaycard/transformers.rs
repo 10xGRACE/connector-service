@@ -8,7 +8,7 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes},
+    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, WalletData},
     router_data::{ConnectorSpecificAuth, ErrorResponse},
     router_data_v2::RouterDataV2,
 };
@@ -417,29 +417,52 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
             router_data.request.currency,
         )?;
 
-        let ccard = match &router_data.request.payment_method_data {
-            PaymentMethodData::Card(card) => Ok(card),
+        // Handle different payment methods: Card or GooglePay Wallet
+        let (payment_information, payment_solution) = match &router_data.request.payment_method_data
+        {
+            PaymentMethodData::Card(card) => {
+                let card_network = card.card_network.clone();
+                let card_type = card_network
+                    .and_then(get_barclaycard_card_type)
+                    .map(|s| s.to_string());
+
+                let payment_info = requests::PaymentInformation::Cards(Box::new(
+                    requests::CardPaymentInformation {
+                        card: requests::Card {
+                            number: card.card_number.clone(),
+                            expiration_month: card.card_exp_month.clone(),
+                            expiration_year: card.get_expiry_year_4_digit(),
+                            security_code: card.card_cvc.clone(),
+                            card_type,
+                            type_selection_indicator: Some("1".to_owned()),
+                        },
+                    },
+                ));
+                Ok((payment_info, None))
+            }
+            PaymentMethodData::Wallet(WalletData::GooglePay(google_pay)) => {
+                // Extract the encrypted token from Google Pay
+                let token = match &google_pay.tokenization_data {
+                    domain_types::payment_method_data::GpayTokenizationData::Encrypted(
+                        encrypted,
+                    ) => Ok(encrypted.token.clone()),
+                    _ => Err(errors::ConnectorError::InvalidWalletToken {
+                        wallet_name: "Google Pay".to_string(),
+                    }),
+                }?;
+
+                let payment_info = requests::PaymentInformation::GooglePay(
+                    requests::GooglePayPaymentInformation {
+                        fluid_data: requests::FluidData { value: token },
+                    },
+                );
+                // Google Pay uses payment_solution "012"
+                Ok((payment_info, Some("012".to_string())))
+            }
             _ => Err(errors::ConnectorError::NotImplemented(
-                "Only card payments are supported".to_string(),
+                "Only card and Google Pay wallet payments are supported".to_string(),
             )),
         }?;
-
-        let card_network = ccard.card_network.clone();
-        let card_type = card_network
-            .and_then(get_barclaycard_card_type)
-            .map(|s| s.to_string());
-
-        let payment_information =
-            requests::PaymentInformation::Cards(Box::new(requests::CardPaymentInformation {
-                card: requests::Card {
-                    number: ccard.card_number.clone(),
-                    expiration_month: ccard.card_exp_month.clone(),
-                    expiration_year: ccard.get_expiry_year_4_digit(),
-                    security_code: ccard.card_cvc.clone(),
-                    card_type,
-                    type_selection_indicator: Some("1".to_owned()),
-                },
-            }));
 
         let email = router_data
             .resource_common_data
@@ -470,7 +493,7 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                 router_data.request.capture_method,
                 Some(common_enums::CaptureMethod::Automatic) | None
             )),
-            payment_solution: None, // Only set for wallet payments (GooglePay="012", ApplePay="001")
+            payment_solution, // Set to "012" for Google Pay, None for card payments
             cavv_algorithm: Some(CAVV_ALGORITHM_ATN.to_string()),
         };
 
