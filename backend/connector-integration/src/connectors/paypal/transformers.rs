@@ -34,7 +34,7 @@ use domain_types::{
     utils,
 };
 use error_stack::ResultExt;
-use hyperswitch_masking::{ExposeInterface, Secret};
+use hyperswitch_masking::{ExposeInterface, PeekInterface, Secret};
 use serde::{Deserialize, Serialize};
 
 use url::Url;
@@ -631,7 +631,7 @@ pub enum UsageType {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(untagged)]
 pub enum PaymentSourceItem<
     T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
 > {
@@ -641,6 +641,24 @@ pub enum PaymentSourceItem<
     Eps(RedirectRequest),
     Giropay(RedirectRequest),
     Sofort(RedirectRequest),
+    GooglePay(GooglePaySource<T>),
+}
+
+#[derive(Debug, Serialize)]
+pub struct GooglePaySource<
+    T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
+> {
+    #[serde(rename = "google_pay")]
+    google_pay: GooglePayTokenData<T>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GooglePayTokenData<
+    T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
+> {
+    token: Secret<String>,
+    #[serde(skip)]
+    _phantom: std::marker::PhantomData<T>,
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CardVaultResponse {
@@ -1051,6 +1069,46 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                         payment_source,
                     })
                 }
+                WalletData::GooglePay(google_pay_data) => {
+                    // Google Pay is processed as a card payment source in PayPal
+                    // We need to extract card details from the decrypted tokenization data
+                    let card = match &google_pay_data.tokenization_data {
+                        domain_types::payment_method_data::GpayTokenizationData::Decrypted(
+                            decrypt_data,
+                        ) => Ok(decrypt_data.clone()),
+                        domain_types::payment_method_data::GpayTokenizationData::Encrypted(_) => {
+                            Err(ConnectorError::NotSupported {
+                                message:
+                                    "Encrypted Google Pay token not supported. Decryption required."
+                                        .to_string(),
+                                connector: "paypal",
+                            })
+                        }
+                    }?;
+
+                    // For Google Pay in PayPal, we create a card payment source
+                    // Note: CardNumber's peek() gives us access to the underlying string
+                    let payment_source = Some(PaymentSourceItem::GooglePay(GooglePaySource {
+                        google_pay: GooglePayTokenData {
+                            token: Secret::new(format!(
+                                "{},{},{},{}",
+                                card.application_primary_account_number.get_card_no(),
+                                card.card_exp_month.peek(),
+                                card.card_exp_year.peek(),
+                                card.cryptogram
+                                    .map(|s| s.peek().to_string())
+                                    .unwrap_or_default()
+                            )),
+                            _phantom: std::marker::PhantomData,
+                        },
+                    }));
+
+                    Ok(Self {
+                        intent,
+                        purchase_units,
+                        payment_source,
+                    })
+                }
                 WalletData::AliPayQr(_)
                 | WalletData::AliPayRedirect(_)
                 | WalletData::AliPayHkRedirect(_)
@@ -1063,7 +1121,6 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 | WalletData::ApplePayRedirect(_)
                 | WalletData::ApplePayThirdPartySdk(_)
                 | WalletData::DanaRedirect {}
-                | WalletData::GooglePay(_)
                 | WalletData::BluecodeRedirect {}
                 | WalletData::GooglePayRedirect(_)
                 | WalletData::GooglePayThirdPartySdk(_)
