@@ -10,7 +10,7 @@ use domain_types::{
     },
     errors,
     payment_method_data::{
-        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData,
     },
     router_data::ConnectorSpecificAuth,
     router_data_v2::RouterDataV2,
@@ -127,6 +127,15 @@ impl From<NmiStatus> for RefundStatus {
 pub enum NmiPaymentMethod<T: PaymentMethodDataTypes> {
     Card(Box<CardData<T>>),
     Ach(Box<AchData>),
+    GooglePay(Box<GooglePayData>),
+}
+
+// ===== GOOGLE PAY DATA =====
+
+#[derive(Debug, Serialize)]
+pub struct GooglePayData {
+    #[serde(rename = "payment_token")]
+    payment_token: Secret<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -249,6 +258,25 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 (
                     NmiPaymentMethod::Ach(Box::new(ach_data)),
                     TransactionType::Sale,
+                )
+            }
+            PaymentMethodData::Wallet(WalletData::GooglePay(google_pay_data)) => {
+                // Google Pay uses payment_token from Collect.js
+                let google_pay_token = google_pay_data
+                    .tokenization_data
+                    .get_encrypted_google_pay_token()
+                    .change_context(errors::ConnectorError::MissingRequiredField {
+                        field_name: "google_pay_token",
+                    })?;
+                (
+                    NmiPaymentMethod::GooglePay(Box::new(GooglePayData {
+                        payment_token: Secret::new(google_pay_token),
+                    })),
+                    if router_data.request.is_auto_capture()? {
+                        TransactionType::Sale
+                    } else {
+                        TransactionType::Auth
+                    },
                 )
             }
             _ => {
