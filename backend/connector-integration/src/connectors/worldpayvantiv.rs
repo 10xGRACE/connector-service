@@ -88,16 +88,6 @@ fn unwrap_json_wrapped_xml(response_bytes: &[u8]) -> CustomResult<String, Connec
 }
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
-    ConnectorIntegrationV2<
-        IncrementalAuthorization,
-        PaymentFlowData,
-        PaymentsIncrementalAuthorizationData,
-        PaymentsResponseData,
-    > for Worldpayvantiv<T>
-{
-}
-
-impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
     PaymentPreAuthenticateV2<T> for Worldpayvantiv<T>
 {
 }
@@ -355,6 +345,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
 
 // Define connector prerequisites for payment flows (XML-based)
 // Group flows by unique request/response combinations to avoid duplicate templating structs
+// Note: IncrementalAuthorization uses same request/response types as Authorize, so it's implemented manually
 macros::create_all_prerequisites!(
     connector_name: Worldpayvantiv,
     generic_type: T,
@@ -468,6 +459,106 @@ macros::macro_connector_implementation!(
         }
     }
 );
+
+// Incremental Authorization Flow Implementation - Manual implementation
+// Uses same request/response types as Authorize - cannot use macro due to type conflicts
+impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
+    ConnectorIntegrationV2<
+        IncrementalAuthorization,
+        PaymentFlowData,
+        PaymentsIncrementalAuthorizationData,
+        PaymentsResponseData,
+    > for Worldpayvantiv<T>
+{
+    fn get_headers(
+        &self,
+        req: &RouterDataV2<
+            IncrementalAuthorization,
+            PaymentFlowData,
+            PaymentsIncrementalAuthorizationData,
+            PaymentsResponseData,
+        >,
+    ) -> CustomResult<Vec<(String, Maskable<String>)>, ConnectorError> {
+        self.build_headers(req)
+    }
+
+    fn get_content_type(&self) -> &'static str {
+        self.common_get_content_type()
+    }
+
+    fn get_url(
+        &self,
+        req: &RouterDataV2<
+            IncrementalAuthorization,
+            PaymentFlowData,
+            PaymentsIncrementalAuthorizationData,
+            PaymentsResponseData,
+        >,
+    ) -> CustomResult<String, ConnectorError> {
+        Ok(self.connector_base_url_payments(req).to_string())
+    }
+
+    fn get_request_body(
+        &self,
+        req: &RouterDataV2<
+            IncrementalAuthorization,
+            PaymentFlowData,
+            PaymentsIncrementalAuthorizationData,
+            PaymentsResponseData,
+        >,
+    ) -> CustomResult<Option<RequestContent>, ConnectorError> {
+        let request = WorldpayvantivPaymentsRequest::try_from(WorldpayvantivRouterData {
+            router_data: req.clone(),
+            connector: self.clone(),
+        })?;
+        Ok(Some(RequestContent::Xml(Box::new(request))))
+    }
+
+    fn handle_response_v2(
+        &self,
+        data: &RouterDataV2<
+            IncrementalAuthorization,
+            PaymentFlowData,
+            PaymentsIncrementalAuthorizationData,
+            PaymentsResponseData,
+        >,
+        event_builder: Option<&mut events::Event>,
+        res: Response,
+    ) -> CustomResult<
+        RouterDataV2<
+            IncrementalAuthorization,
+            PaymentFlowData,
+            PaymentsIncrementalAuthorizationData,
+            PaymentsResponseData,
+        >,
+        ConnectorError,
+    > {
+        let xml_str = unwrap_json_wrapped_xml(&res.response)?;
+
+        let response: CnpOnlineResponse = deserialize_xml_to_struct(&xml_str)
+            .change_context(ConnectorError::ResponseDeserializationFailed)?;
+        if let Some(i) = event_builder {
+            i.set_connector_response(&response)
+        }
+        RouterDataV2::try_from(ResponseRouterData {
+            response,
+            router_data: data.clone(),
+            http_code: res.status_code,
+        })
+    }
+
+    fn get_error_response_v2(
+        &self,
+        res: Response,
+        event_builder: Option<&mut events::Event>,
+    ) -> CustomResult<ErrorResponse, ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+
+    fn get_http_method(&self) -> common_utils::request::Method {
+        common_utils::request::Method::Post
+    }
+}
 
 macros::macro_connector_implementation!(
     connector_default_implementations: [get_content_type, get_error_response_v2],
