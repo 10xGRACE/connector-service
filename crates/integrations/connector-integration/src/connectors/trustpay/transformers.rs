@@ -1872,7 +1872,7 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
         >,
     > for TrustpayRepeatPaymentRequest
 {
-    type Error = error_stack::Report<ConnectorError>;
+    type Error = error_stack::Report<IntegrationError>;
 
     fn try_from(
         item: TrustpayRouterData<
@@ -1892,10 +1892,15 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 item.router_data.request.minor_amount,
                 item.router_data.request.currency,
             )
-            .change_context(ConnectorError::AmountConversionFailed)?;
+            .change_context(IntegrationError::AmountConversionFailed {
+                context: Default::default(),
+            })?;
 
-        let auth = TrustpayAuthType::try_from(&item.router_data.connector_config)
-            .change_context(ConnectorError::FailedToObtainAuthType)?;
+        let auth = TrustpayAuthType::try_from(&item.router_data.connector_config).change_context(
+            IntegrationError::FailedToObtainAuthType {
+                context: Default::default(),
+            },
+        )?;
 
         let return_url = item.router_data.request.get_router_return_url()?;
 
@@ -1906,18 +1911,21 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             ) => connector_mandate_ref
                 .get_connector_mandate_id()
                 .ok_or_else(|| {
-                    error_stack::report!(ConnectorError::MissingRequiredField {
+                    error_stack::report!(IntegrationError::MissingRequiredField {
                         field_name: "connector_mandate_id",
+                        context: Default::default(),
                     })
                 })?,
             domain_types::connector_types::MandateReferenceId::NetworkMandateId(_) => {
-                return Err(error_stack::report!(ConnectorError::NotImplemented(
+                return Err(error_stack::report!(IntegrationError::NotImplemented(
                     "Network mandate ID not supported for TrustPay MIT".to_string(),
+                    Default::default(),
                 )));
             }
             domain_types::connector_types::MandateReferenceId::NetworkTokenWithNTI(_) => {
-                return Err(error_stack::report!(ConnectorError::NotImplemented(
+                return Err(error_stack::report!(IntegrationError::NotImplemented(
                     "Network token with NTI not supported for TrustPay MIT".to_string(),
+                    Default::default(),
                 )));
             }
         };
