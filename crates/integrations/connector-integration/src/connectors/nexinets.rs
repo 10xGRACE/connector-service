@@ -611,9 +611,11 @@ macros::macro_connector_implementation!(
     }
 );
 
-// IncrementalAuthorization — POST to
-// /orders/{order_id}/transactions/{transaction_id}/amend
-// Sends the new total amount for the pre-authorized transaction.
+// IncrementalAuthorization — PATCH to
+// /orders/{order_id}/transactions/{transaction_id}
+// Per Nexinets PayEngine v1 API, the "Update order transaction" endpoint is a
+// PATCH on the transaction resource (not a POST /amend). Sends the new total
+// amount for the pre-authorized transaction.
 macros::macro_connector_implementation!(
     connector_default_implementations: [get_content_type, get_error_response_v2],
     connector: Nexinets,
@@ -623,7 +625,7 @@ macros::macro_connector_implementation!(
     resource_common_data: PaymentFlowData,
     flow_request: PaymentsIncrementalAuthorizationData,
     flow_response: PaymentsResponseData,
-    http_method: Post,
+    http_method: Patch,
     generic_type: T,
     [PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize],
     other_functions: {
@@ -642,7 +644,7 @@ macros::macro_connector_implementation!(
             let order_id = nexinets::get_order_id(&meta)?;
             let transaction_id = nexinets::get_transaction_id(&meta)?;
             Ok(format!(
-                "{}/orders/{order_id}/transactions/{transaction_id}/amend",
+                "{}/orders/{order_id}/transactions/{transaction_id}",
                 self.connector_base_url_payments(req),
             ))
         }
