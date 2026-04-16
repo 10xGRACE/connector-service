@@ -1161,17 +1161,24 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
 
 // ===== INCREMENTAL AUTHORIZATION FLOW =====
 //
-// Shift4 exposes `POST /charges/{chargeId}/increment-authorization` to raise the
+// Shift4 exposes `POST /charges/{chargeId}/incremental-authorization` to raise the
 // authorized amount on an existing pre-authorization. The charge must have been
 // created with `captured=false` AND `options.authorizationType="pre"`.
 // Reference: https://dev.shift4.com/docs/api/#increment-charge-authorization
+// Note: the published doc example URL uses the singular "/increment-authorization",
+// but the deployed API only routes the plural "/incremental-authorization". The
+// plural form is what the SDK actually calls.
 //
-// The request body contains only the new (incremented) amount in minor units.
+// The `amount` field in the request is the INCREMENT amount (additional amount to
+// add to the existing authorization), not the new total. This matches CyberSource's
+// `additionalAmount` semantics and Prism's `PaymentsIncrementalAuthorizationData.minor_amount`.
 // The response is the updated charge object, which mirrors `Shift4PaymentsResponse`.
 
 #[derive(Debug, Serialize)]
 pub struct Shift4IncrementalAuthRequest {
-    /// New total authorization amount in minor units (e.g. "1500" for $15.00 USD).
+    /// Increment amount (additional funds to authorize) in minor units.
+    /// Example: initial charge $10.00 (amount=1000) + increment $5.00 (amount=500)
+    /// results in a total authorization of $15.00 (amount=1500).
     pub amount: MinorUnit,
 }
 

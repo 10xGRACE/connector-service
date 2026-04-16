@@ -479,9 +479,12 @@ macros::macro_connector_implementation!(
     }
 );
 
-// IncrementalAuthorization Flow — POST /charges/{chargeId}/increment-authorization
+// IncrementalAuthorization Flow — POST /charges/{chargeId}/incremental-authorization
 // Increases the authorized amount on an existing Shift4 pre-authorization. Requires
 // the original charge to be `captured=false` AND `options.authorizationType="pre"`.
+// Note: Shift4's public API doc example shows `/increment-authorization`, but the
+// live API actually exposes `/incremental-authorization` (verified against sandbox);
+// only the plural form is routed on the server.
 macros::macro_connector_implementation!(
     connector_default_implementations: [get_content_type, get_error_response_v2],
     connector: Shift4,
@@ -512,7 +515,7 @@ macros::macro_connector_implementation!(
                 .get_connector_transaction_id()
                 .change_context(IntegrationError::MissingConnectorTransactionID { context: Default::default() })?;
             let base_url = self.connector_base_url_payments(req);
-            Ok(format!("{base_url}/charges/{connector_transaction_id}/increment-authorization"))
+            Ok(format!("{base_url}/charges/{connector_transaction_id}/incremental-authorization"))
         }
     }
 );
