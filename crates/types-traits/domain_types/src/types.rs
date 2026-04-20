@@ -388,7 +388,7 @@ pub struct Connectors {
     pub finix: ConnectorParams,
     pub trustly: ConnectorParams,
     pub itaubank: ConnectorParams,
-    pub sanlammultidata: ConnectorParams,
+    pub sanlam: ConnectorParams,
     pub pinelabs_online: ConnectorParams,
 }
 
