@@ -396,15 +396,14 @@ impl<T: PaymentMethodDataTypes>
         // `captured=false` AND `options.authorizationType=pre` must be sent. We only
         // attach the `options` block when both conditions hold, otherwise a normal
         // auth/sale is preserved.
-        let options = if matches!(item.request.request_incremental_authorization, Some(true))
-            && !captured
-        {
-            Some(Shift4ChargeOptions {
-                authorization_type: Shift4AuthorizationType::Pre,
-            })
-        } else {
-            None
-        };
+        let options =
+            if matches!(item.request.request_incremental_authorization, Some(true)) && !captured {
+                Some(Shift4ChargeOptions {
+                    authorization_type: Shift4AuthorizationType::Pre,
+                })
+            } else {
+                None
+            };
 
         Ok(Self {
             amount: item.request.minor_amount,
