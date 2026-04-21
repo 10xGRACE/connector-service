@@ -47,10 +47,12 @@ use serde::Serialize;
 use self::transformers::{
     Shift4AuthType, Shift4CaptureRequest, Shift4ClientAuthRequest, Shift4ClientAuthResponse,
     Shift4CreateCustomerRequest, Shift4CreateCustomerResponse, Shift4ErrorResponse,
-    Shift4PSyncRequest, Shift4PaymentsRequest, Shift4PaymentsResponse as Shift4AuthorizeResponse,
-    Shift4PaymentsResponse as Shift4CaptureResponse, Shift4PaymentsResponse as Shift4PSyncResponse,
-    Shift4RSyncRequest, Shift4RefundRequest, Shift4RefundResponse,
-    Shift4RefundResponse as Shift4RSyncResponse, Shift4RepeatPaymentRequest,
+    Shift4IncrementalAuthRequest, Shift4PSyncRequest, Shift4PaymentsRequest,
+    Shift4PaymentsResponse as Shift4AuthorizeResponse,
+    Shift4PaymentsResponse as Shift4CaptureResponse,
+    Shift4PaymentsResponse as Shift4IncrementalAuthResponse,
+    Shift4PaymentsResponse as Shift4PSyncResponse, Shift4RSyncRequest, Shift4RefundRequest,
+    Shift4RefundResponse, Shift4RefundResponse as Shift4RSyncResponse, Shift4RepeatPaymentRequest,
     Shift4RepeatPaymentResponse, Shift4SetupMandateRequest, Shift4SetupMandateResponse,
 };
 use crate::{connectors::macros, types::ResponseRouterData, with_error_response_body};
@@ -247,6 +249,12 @@ macros::create_all_prerequisites!(
             request_body: Shift4SetupMandateRequest<T>,
             response_body: Shift4SetupMandateResponse,
             router_data: RouterDataV2<SetupMandate, PaymentFlowData, SetupMandateRequestData<T>, PaymentsResponseData>,
+        ),
+        (
+            flow: IncrementalAuthorization,
+            request_body: Shift4IncrementalAuthRequest,
+            response_body: Shift4IncrementalAuthResponse,
+            router_data: RouterDataV2<IncrementalAuthorization, PaymentFlowData, PaymentsIncrementalAuthorizationData, PaymentsResponseData>,
         )
     ],
     amount_converters: [],
