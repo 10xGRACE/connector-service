@@ -138,7 +138,8 @@ pub enum ConnectorEnum {
     Finix,
     Trustly,
     Itaubank,
-    Sanlammultidata,
+    Sanlam,
+    PinelabsOnline,
 }
 
 impl ForeignTryFrom<grpc_api_types::payments::Connector> for ConnectorEnum {
@@ -226,6 +227,7 @@ impl ForeignTryFrom<grpc_api_types::payments::Connector> for ConnectorEnum {
             grpc_api_types::payments::Connector::Finix => Ok(Self::Finix),
             grpc_api_types::payments::Connector::Trustly => Ok(Self::Trustly),
             grpc_api_types::payments::Connector::Itaubank => Ok(Self::Itaubank),
+            grpc_api_types::payments::Connector::PinelabsOnline => Ok(Self::PinelabsOnline),
             grpc_api_types::payments::Connector::Unspecified => {
                 Err(IntegrationError::InvalidDataFormat {
                     field_name: "connector",
@@ -4021,7 +4023,7 @@ impl ForeignTryFrom<grpc_api_types::payments::connector_specific_config::Config>
             AuthType::Elavon(_) => Ok(Self::Elavon),
             AuthType::Fiserv(_) => Ok(Self::Fiserv),
             AuthType::Fiservemea(_) => Ok(Self::Fiservemea),
-            AuthType::Sanlammultidata(_) => Ok(Self::Sanlammultidata),
+            AuthType::Sanlam(_) => Ok(Self::Sanlam),
             AuthType::Forte(_) => Ok(Self::Forte),
             AuthType::Getnet(_) => Ok(Self::Getnet),
             AuthType::Globalpay(_) => Ok(Self::Globalpay),
@@ -4111,6 +4113,7 @@ impl ForeignTryFrom<grpc_api_types::payments::connector_specific_config::Config>
             AuthType::Revolv3(_) => Ok(Self::Revolv3),
             AuthType::Authorizedotnet(_) => Ok(Self::Authorizedotnet),
             AuthType::Ppro(_) => Ok(Self::Ppro),
+            AuthType::PinelabsOnline(_) => Ok(Self::PinelabsOnline),
         }
     }
 }
